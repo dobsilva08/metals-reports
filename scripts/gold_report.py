@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import os, re, json, argparse, requests, time, html, textwrap, hashlib, math, statistics
+import os, re, json, argparse, requests, time, html, textwrap, math, statistics
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any, List, Tuple
 
@@ -31,27 +31,27 @@ def load_env_if_present():
             if k and v and k not in os.environ: os.environ[k.strip()] = v.strip()
 
 # =========================
-# CONTADOR & TRAVA
+# .SENT — MARCADORES (anti-duplicados)
 # =========================
-def read_counter(counter_file: str, key: str, start_counter: int = 1) -> int:
-    try:
-        data = json.load(open(counter_file, "r", encoding="utf-8")) if os.path.exists(counter_file) else {}
-        val = int(data.get(key, start_counter))
-        data[key] = val + 1
-        with open(counter_file, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        return val
-    except Exception:
-        return start_counter
+def _sent_key(period: str, now: Optional[datetime] = None) -> str:
+    now = now or datetime.now(BRT)
+    if period == "daily":
+        return f"done-gold-daily-{now.strftime('%Y-%m-%d')}"
+    if period == "weekly":
+        return f"done-gold-weekly-{now.strftime('%Y-W%V')}"
+    if period == "monthly":
+        return f"done-gold-monthly-{now.strftime('%Y-%m')}"
+    return f"done-gold-{period}-{now.strftime('%Y-%m-%d')}"
 
-def ensure_not_already_sent(sent_dir: str, date_iso: Optional[str], period: str):
-    os.makedirs(sent_dir, exist_ok=True)
-    key = f"XAU-{date_iso or datetime.now(BRT).strftime('%Y-%m-%d')}-{period.lower()}"
-    h = hashlib.sha1(key.encode("utf-8")).hexdigest()[:10]
-    path = os.path.join(sent_dir, f"{key}.{h}.lock")
-    if os.path.exists(path):
-        raise SystemExit(f"[skip] Já enviado hoje para XAU/{period}")
-    with open(path, "w", encoding="utf-8") as f: f.write(key+"\n")
+def sent_exists(root: str, period: str) -> bool:
+    os.makedirs(root, exist_ok=True)
+    return os.path.exists(os.path.join(root, _sent_key(period)))
+
+def mark_sent(root: str, period: str, note: str = ""):
+    os.makedirs(root, exist_ok=True)
+    path = os.path.join(root, _sent_key(period))
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(f"{datetime.now(BRT).isoformat()} {note}\n")
     return path
 
 # =========================
@@ -173,29 +173,6 @@ def simple_corr(xs: List[float], ys: List[float]) -> Optional[float]:
     if sx==0 or sy==0: return None
     return cov/(sx*sy)
 
-def last_n_days_series_yahoo(symbol: str, n: int=35) -> List[float]:
-    u = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range={n}d&interval=1d"
-    r = requests.get(u, timeout=30)
-    if r.status_code!=200: return []
-    try:
-        closes = r.json()["chart"]["result"][0]["indicators"]["quote"][0]["close"]
-        return [float(x) for x in closes if x is not None]
-    except Exception:
-        return []
-
-def last_n_days_series_fred(series_id: str, n: int, api_key: str) -> List[float]:
-    if not api_key: return []
-    url = "https://api.stlouisfed.org/fred/series/observations"
-    params = {"series_id": series_id, "api_key": api_key, "file_type": "json", "sort_order": "desc", "limit": n}
-    r = requests.get(url, params=params, timeout=30)
-    if r.status_code!=200: return []
-    obs = r.json().get("observations", [])
-    vals = []
-    for o in obs:
-        v = _maybe_float(o.get("value"))
-        if v is not None: vals.append(v)
-    return list(reversed(vals))
-
 # =========================
 # PROMPT — 10 SEÇÕES
 # =========================
@@ -299,27 +276,33 @@ def main():
     if args.send_as in ("message","both") and (not tg_token or not tg_chat):
         raise SystemExit("Defina TELEGRAM_BOT_TOKEN e TELEGRAM_CHAT_ID_METALS (ou passe --chat-id).")
 
+    # .sent (na raiz do repo)
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    sent_dir  = os.path.join(repo_root, ".sent")
+    if sent_exists(sent_dir, args.period):
+        raise SystemExit(f"[skip] marcador .sent já existe para {args.period}")
+
     label_map = {"daily": "Diário", "weekly": "Semanal", "monthly": "Mensal"}
     key_map   = {"daily": "diario", "weekly": "semanal", "monthly": "mensal"}
     label     = label_map[args.period]
     key       = key_map[args.period]
 
     data_str  = iso_to_brt_human(args.date) if args.date else today_brt_str()
-    numero    = read_counter(args.counter_file, key=f"xau_{key}", start_counter=args.start_counter)
-
+    numero    = 1  # contador opcional; pode usar counters-xau.json se quiser
+    # ==== COLETAS ====
     groq_key  = os.environ.get("GROQ_API_KEY","")
     fred_key  = os.environ.get("FRED_API_KEY","")
     gold_key  = os.environ.get("GOLDAPI_KEY","")
 
-    # ===== Coleta =====
     metrics: Dict[str, Any] = {}
 
+    # spot
     metrics["spot"] = {"xauusd": spot_xauusd(gold_key), "unit": "USD/oz"}
 
-    gld_sh = gld_shares_outstanding()
-    iau_sh = iau_shares_outstanding()
-    metrics["etf_flows"] = {"gld_shares": gld_sh, "iau_shares": iau_sh, "unit": "shares"}
+    # ETFs
+    metrics["etf_flows"] = {"gld_shares": gld_shares_outstanding(), "iau_shares": iau_shares_outstanding(), "unit": "shares"}
 
+    # COT
     cot = cftc_gold_legacy_latest()
     if cot:
         metrics["cftc_futures_position"] = {
@@ -330,6 +313,7 @@ def main():
             "unit": "contratos"
         }
 
+    # FRED
     if fred_key:
         ry = fred_series_latest("DFII10", fred_key)
         dx = fred_series_latest("DTWEXBGS", fred_key)
@@ -345,25 +329,17 @@ def main():
     term = gold_contango_6m()
     metrics["term_structure"] = term if term else {"contango_usd": None, "note": "Falha em GC=F ou contrato +6m"}
 
-    # placeholders (sem fonte pública unificada)
+    # placeholders
     metrics["central_bank_reserves"] = {"monthly_change_tonnes": None, "ytd_tonnes": None}
     metrics["miners_banks"] = {"hedge_ratio": None, "production_qoq_pct": None}
     metrics["institution_vs_retail"] = {"institutional_share": None, "retail_share": None}
     metrics["production_cost"] = {"aisc_avg_usd_oz": None}
+    metrics["correlations"] = {"gold_dxy_30d": None}
 
-    if args.hist_corr and fred_key:
-        gl = last_n_days_series_yahoo("GLD", 35)
-        dxy = last_n_days_series_fred("DTWEXBGS", 35, fred_key)
-        c = simple_corr(gl[-30:], dxy[-30:]) if len(gl)>=30 and len(dxy)>=30 else None
-        metrics["correlations"] = {"gold_dxy_30d": c}
-    else:
-        metrics["correlations"] = {"gold_dxy_30d": None}
-
-    # ===== LLM =====
+    # ==== LLM ====
     prompt  = build_prompt_xau(data_str, numero, metrics, label)
-    ensure_not_already_sent(os.path.join(os.path.dirname(__file__), ".sent_xau"), args.date, args.period)
-
     content = llm_generate_groq(args.model, prompt, groq_key)
+
     if not content:
         corpo = textwrap.dedent(f"""
         ⚠️ Não foi possível gerar o relatório automático hoje.
@@ -381,7 +357,9 @@ def main():
     if args.send_as in ("message","both"):
         msgs = _chunk_message(full, 3900)
         telegram_send_messages(os.environ.get("TELEGRAM_BOT_TOKEN",""), tg_chat, msgs, topic_id=tg_topic)
-        print(f"[ok] Enviado para chat {tg_chat}")
+        # cria marcador .sent
+        mpath = mark_sent(sent_dir, args.period, note="xau sent")
+        print(f"[ok] Enviado | marker: {mpath}")
 
 if __name__ == "__main__":
     main()
