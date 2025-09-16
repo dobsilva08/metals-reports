@@ -2,7 +2,7 @@ name: Gold Report (Daily)
 
 on:
   schedule:
-    - cron: "15 09 * * *"   # 12:15 UTC = 06:15 BRT (aprox.)
+    - cron: "15 09 * * *"   # 09:15 UTC ≈ 06:15 BRT
   workflow_dispatch: {}
 
 jobs:
