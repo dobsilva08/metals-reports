@@ -1,232 +1,642 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+"""
+gold_report.py — Metals Reports (Ouro)
+Coleta dados de múltiplas fontes (APIs e endpoints públicos), consolida métricas,
+gera interpretação executiva via LLM (Groq) e envia o relatório ao Telegram.
 
-import os, re, json, argparse, requests, time, html, textwrap, math, statistics
+DEPENDÊNCIAS:
+  pip install -r requirements.txt
+  (requests, python-dateutil, pandas, openpyxl, beautifulsoup4, lxml)
+
+ENV ESPERADAS (GitHub Secrets):
+  GROQ_API_KEY
+  TELEGRAM_BOT_TOKEN
+  TELEGRAM_CHAT_ID_METALS
+  FRED_API_KEY
+  NASDAQ_DATA_LINK_API_KEY
+  GOLDAPI_KEY
+  ALPHA_VANTAGE_API_KEY
+  METALS_DEV_API
+  METAL_PRICE_API
+  SEC_USER_AGENT              # recomendado pela SEC para EDGAR; um e-mail é suficiente
+  AISC_TICKERS                # opcional: ex. "NEM,GOLD,AEM,KGC"
+"""
+
+import os, json, time, html, re, io
+import requests
+import pandas as pd
+from bs4 import BeautifulSoup
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any, List, Tuple
 
-# =========================
-# FUSO & DATA (BRT)
-# =========================
+# ------------------------ Config & util ------------------------
+
 BRT = timezone(timedelta(hours=-3), name="BRT")
-MESES = ["janeiro","fevereiro","março","abril","maio","junho","julho","agosto","setembro","outubro","novembro","dezembro"]
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SENT_DIR = os.path.join(ROOT, ".sent")
+os.makedirs(SENT_DIR, exist_ok=True)
 
-def today_brt_str() -> str:
-    now = datetime.now(BRT); return f"{now.day} de {MESES[now.month-1]} de {now.year}"
+def today_brt() -> datetime:
+    return datetime.now(BRT)
 
-def iso_to_brt_human(iso_date: str) -> str:
+def today_brt_str_long() -> str:
+    meses = ["janeiro","fevereiro","março","abril","maio","junho","julho","agosto","setembro","outubro","novembro","dezembro"]
+    now = today_brt()
+    return f"{now.day} de {meses[now.month-1]} de {now.year}"
+
+def ymd(date: datetime) -> str:
+    return date.strftime("%Y-%m-%d")
+
+def guard_already_sent(period_key: str) -> bool:
+    """Evita envios duplicados: cria/checa marcador .sent/"""
+    tag = f"done-gold-{period_key}-{ymd(today_brt())}"
+    path = os.path.join(SENT_DIR, tag)
+    if os.path.exists(path):
+        return True
+    open(path, "w").close()
+    return False
+
+def safe_float(x) -> Optional[float]:
     try:
-        dt = datetime.strptime(iso_date, "%Y-%m-%d").replace(tzinfo=BRT)
-        return f"{dt.day} de {MESES[dt.month-1]} de {dt.year}"
+        if x is None: return None
+        return float(x)
     except Exception:
-        return iso_date
+        return None
 
-def load_env_if_present():
-    env_path = os.path.join(os.path.dirname(__file__), "..", ".env")
-    if os.path.exists(env_path):
-        for raw in open(env_path, "r", encoding="utf-8"):
-            line = raw.strip()
-            if not line or line.startswith("#") or "=" not in line: continue
-            k, v = line.split("=", 1)
-            if k and v and k not in os.environ: os.environ[k.strip()] = v.strip()
-
-# =========================
-# .SENT — MARCADORES (anti-duplicados)
-# =========================
-def _sent_key(period: str, now: Optional[datetime] = None) -> str:
-    now = now or datetime.now(BRT)
-    if period == "daily":
-        return f"done-gold-daily-{now.strftime('%Y-%m-%d')}"
-    if period == "weekly":
-        return f"done-gold-weekly-{now.strftime('%Y-W%V')}"
-    if period == "monthly":
-        return f"done-gold-monthly-{now.strftime('%Y-%m')}"
-    return f"done-gold-{period}-{now.strftime('%Y-%m-%d')}"
-
-def sent_exists(root: str, period: str) -> bool:
-    os.makedirs(root, exist_ok=True)
-    return os.path.exists(os.path.join(root, _sent_key(period)))
-
-def mark_sent(root: str, period: str, note: str = ""):
-    os.makedirs(root, exist_ok=True)
-    path = os.path.join(root, _sent_key(period))
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(f"{datetime.now(BRT).isoformat()} {note}\n")
-    return path
-
-# =========================
-# UTILS
-# =========================
-def _maybe_float(x):
-    try: return float(x)
-    except: return None
-
-# =========================
-# COLETORES DE DADOS
-# =========================
-
-# FRED (DFII10 = real 10y, DTWEXBGS = Dollar Broad)
-def fred_series_latest(series_id: str, api_key: str) -> Optional[Tuple[str, float]]:
-    if not api_key: return None
-    url = "https://api.stlouisfed.org/fred/series/observations"
-    params = {"series_id": series_id, "api_key": api_key, "file_type": "json", "sort_order": "desc", "limit": 1}
-    r = requests.get(url, params=params, timeout=30)
-    if r.status_code != 200: return None
-    obs = r.json().get("observations", [])
-    if not obs: return None
-    date = obs[0].get("date"); val = _maybe_float(obs[0].get("value"))
-    return (date, val) if (date and val is not None) else None
-
-# CFTC COT (Gold COMEX 088691 — Futures Only Legacy)
-def cftc_gold_legacy_latest() -> Optional[Dict[str, Any]]:
-    url = "https://www.cftc.gov/dea/futures/deacmxlf.htm"
-    r = requests.get(url, timeout=30)
-    if r.status_code != 200: return None
-    txt = r.text
-    m = re.search(r"GOLD\s*-\s*COMMODITY EXCHANGE INC\.\s*Code-0?88?691(.*?)(?:MICRO GOLD|COBALT|$)", txt, flags=re.S|re.I)
-    if not m: return None
-    block = m.group(1)
-    d = re.search(r"Commitments of Traders - Futures Only,\s*([A-Za-z]+\s+\d{1,2},\s*\d{4})", block)
-    asof = d.group(1) if d else None
-    nums = re.findall(r"\b(\d[\d,]*)\b", block)
-    nums = [int(x.replace(",","")) for x in nums[:40]] if nums else []
-    noncomm_long = nums[0] if len(nums)>1 else None
-    noncomm_short= nums[1] if len(nums)>1 else None
-    net = (noncomm_long - noncomm_short) if (noncomm_long is not None and noncomm_short is not None) else None
-    return {"as_of": asof, "noncomm_long": noncomm_long, "noncomm_short": noncomm_short, "noncomm_net": net}
-
-# GLD / IAU shares outstanding (páginas oficiais)
-def gld_shares_outstanding() -> Optional[float]:
-    urls = [
-        "https://www.ssga.com/us/en/intermediary/etfs/spdr-gold-shares-gld",
-        "https://www.spdrgoldshares.com/usa/financial-information/",
-    ]
-    pat_m = re.compile(r"Shares Outstanding[^0-9]*([\d,.]+)\s*M", flags=re.I)
-    pat_n = re.compile(r"Total Shares Outstanding[^0-9]*([\d,]+)", flags=re.I)
-    for u in urls:
-        r = requests.get(u, timeout=30)
-        if r.status_code != 200: continue
-        t = r.text
-        m = pat_m.search(t)
-        if m:
-            millions = float(m.group(1).replace(",",""))
-            return millions * 1_000_000.0
-        m2 = pat_n.search(t)
-        if m2:
-            num = float(m2.group(1).replace(",",""))
-            return num
+def http_get(url: Optional[str], params: dict = None, headers: dict = None, timeout: int = 30) -> Optional[requests.Response]:
+    if not url:
+        return None
+    try:
+        r = requests.get(url, params=params, headers=headers, timeout=timeout)
+        if r.status_code == 200:
+            return r
+    except Exception:
+        return None
     return None
 
-def iau_shares_outstanding() -> Optional[float]:
-    u = "https://www.ishares.com/us/products/239561/ishares-gold-trust-fund"
-    r = requests.get(u, timeout=30)
-    if r.status_code != 200: return None
-    t = r.text
-    m = re.search(r"Shares Outstanding[^0-9]*([\d,]+)", t, flags=re.I)
-    if not m: return None
-    return float(m.group(1).replace(",",""))
+# ------------------------ Spot XAU/USD (cadeia de fallbacks) ------------------------
 
-# Spot ouro (GoldAPI opcional; fallback Yahoo Finance)
-def spot_xauusd(goldapi_key: Optional[str]) -> Optional[float]:
-    if goldapi_key:
+def spot_from_nasdaq_lbma() -> Optional[float]:
+    key = os.environ.get("NASDAQ_DATA_LINK_API_KEY","")
+    if not key:
+        return None
+    url = "https://data.nasdaq.com/api/v3/datasets/LBMA/GOLD.json"
+    r = http_get(url, params={"api_key": key})
+    if not r:
+        return None
+    try:
+        data = r.json().get("dataset", {})
+        rows = data.get("data", [])
+        for row in rows:
+            usd_pm = safe_float(row[2] if len(row) > 2 else None)
+            usd_am = safe_float(row[1] if len(row) > 1 else None)
+            if usd_pm: return usd_pm
+            if usd_am: return usd_am
+    except Exception:
+        return None
+    return None
+
+def spot_from_alpha_vantage() -> Optional[float]:
+    key = os.environ.get("ALPHA_VANTAGE_API_KEY","")
+    if not key:
+        return None
+    base = "https://www.alphavantage.co/query"
+    r = http_get(base, params={
+        "function": "CURRENCY_EXCHANGE_RATE",
+        "from_currency": "XAU",
+        "to_currency": "USD",
+        "apikey": key
+    })
+    if r:
         try:
-            r = requests.get("https://www.goldapi.io/api/XAU/USD",
-                             headers={"x-access-token": goldapi_key}, timeout=30)
-            if r.status_code == 200:
-                return _maybe_float(r.json().get("price"))
+            j = r.json().get("Realtime Currency Exchange Rate", {})
+            val = safe_float(j.get("5. Exchange Rate"))
+            if val: return val
         except Exception:
             pass
-    r2 = requests.get("https://query1.finance.yahoo.com/v7/finance/quote?symbols=XAUUSD%3DX", timeout=30)
-    if r2.status_code == 200:
-        try: return float(r2.json()["quoteResponse"]["result"][0]["regularMarketPrice"])
-        except Exception: return None
+    r2 = http_get(base, params={
+        "function": "FX_DAILY",
+        "from_symbol": "XAU",
+        "to_symbol": "USD",
+        "outputsize": "compact",
+        "apikey": key
+    })
+    if r2:
+        try:
+            ts = r2.json().get("Time Series FX (Daily)", {})
+            if ts:
+                last_day = sorted(ts.keys())[-1]
+                close = safe_float(ts[last_day].get("4. close"))
+                if close: return close
+        except Exception:
+            pass
     return None
 
-# Estrutura a termo: front GC=F vs contrato +6m (Yahoo Finance)
-MONTH_CODE = "FGHJKMNQUVXZ"
-def cme_gold_symbol_for_month(year:int, month:int) -> str:
-    return f"GC{MONTH_CODE[month-1]}{str(year)[-2:]}"
+def spot_from_goldapi() -> Optional[float]:
+    key = os.environ.get("GOLDAPI_KEY","")
+    if not key:
+        return None
+    url = "https://www.goldapi.io/api/XAU/USD"
+    r = http_get(url, headers={"x-access-token": key})
+    if not r:
+        return None
+    try:
+        j = r.json()
+        return safe_float(j.get("price"))
+    except Exception:
+        return None
 
-def gold_contango_6m() -> Optional[Dict[str, Any]]:
-    now = datetime.now(BRT)
-    rf = requests.get("https://query1.finance.yahoo.com/v7/finance/quote?symbols=GC%3DF", timeout=30)
-    if rf.status_code != 200: return None
-    jf = rf.json(); front = jf["quoteResponse"]["result"]
-    if not front: return None
-    front_price = _maybe_float(front[0].get("regularMarketPrice"))
-    target = now + timedelta(days=182)
-    sym = cme_gold_symbol_for_month(target.year, target.month)
-    r2 = requests.get(f"https://query1.finance.yahoo.com/v7/finance/quote?symbols={sym}", timeout=30)
-    fut_price = None
-    if r2.status_code == 200:
-        j2 = r2.json(); fut = j2["quoteResponse"]["result"]
-        if fut: fut_price = _maybe_float(fut[0].get("regularMarketPrice"))
-    if front_price is None or fut_price is None: return None
-    return {"front_symbol":"GC=F","front_price":front_price,"fut6m_symbol":sym,"fut6m_price":fut_price,"contango_usd":fut_price-front_price}
+def spot_from_metals_dev() -> Optional[float]:
+    key = os.environ.get("METALS_DEV_API","")
+    if not key:
+        return None
+    url = "https://api.metals.dev/v1/latest"
+    r = http_get(url, params={"api_key": key, "symbols": "XAU", "base": "USD"})
+    if not r:
+        return None
+    try:
+        j = r.json()
+        return safe_float(((j.get("data") or {}).get("XAU") or {}).get("price"))
+    except Exception:
+        return None
 
-# Correlação GLD vs DXY 30d (opcional)
-def simple_corr(xs: List[float], ys: List[float]) -> Optional[float]:
-    if len(xs)!=len(ys) or len(xs)<5: return None
-    mx, my = statistics.mean(xs), statistics.mean(ys)
-    cov = sum((x-mx)*(y-my) for x,y in zip(xs,ys)) / (len(xs)-1)
-    sx = math.sqrt(sum((x-mx)**2 for x in xs)/(len(xs)-1)); sy = math.sqrt(sum((y-my)**2 for y in ys)/(len(ys)-1))
-    if sx==0 or sy==0: return None
-    return cov/(sx*sy)
+def spot_from_metalpriceapi() -> Optional[float]:
+    key = os.environ.get("METAL_PRICE_API","")
+    if not key:
+        return None
+    url = "https://api.metalpriceapi.com/v1/latest"
+    r = http_get(url, params={"api_key": key, "base": "USD", "symbols": "XAU"})
+    if not r:
+        return None
+    try:
+        j = r.json()
+        xau_per_usd = safe_float(((j.get("rates") or {}).get("XAU")))
+        if xau_per_usd and xau_per_usd > 0:
+            return 1.0 / xau_per_usd
+    except Exception:
+        return None
+    return None
 
-# =========================
-# PROMPT — 10 SEÇÕES
-# =========================
-def build_prompt_xau(data_str: str, numero: int, metrics: Dict[str, Any], label: str) -> str:
-    header = f"Dados de Mercado — Ouro (XAU/USD) — {data_str} — {label} — Nº {numero}"
+def spot_from_yahoo() -> Optional[float]:
+    url = "https://query1.finance.yahoo.com/v7/finance/quote"
+    r = http_get(url, params={"symbols": "XAUUSD%3DX,GC%3DF"})
+    if not r:
+        return None
+    try:
+        res = r.json().get("quoteResponse", {}).get("result", [])
+        for it in res:
+            if it.get("symbol") == "XAUUSD=X":
+                val = safe_float(it.get("regularMarketPrice")) or safe_float(it.get("postMarketPrice"))
+                if val: return val
+        for it in res:
+            if it.get("symbol") == "GC=F":
+                val = safe_float(it.get("regularMarketPrice")) or safe_float(it.get("postMarketPrice"))
+                if val: return val
+    except Exception:
+        return None
+    return None
+
+def get_spot_xauusd() -> Tuple[Optional[float], str]:
+    chain = [
+        ("Nasdaq LBMA", spot_from_nasdaq_lbma),
+        ("Alpha Vantage", spot_from_alpha_vantage),
+        ("GoldAPI", spot_from_goldapi),
+        ("Metals.dev", spot_from_metals_dev),
+        ("MetalpriceAPI", spot_from_metalpriceapi),
+        ("Yahoo", spot_from_yahoo),
+    ]
+    for name, fn in chain:
+        val = fn()
+        if val:
+            return val, name
+    return None, "none"
+
+# ------------------------ ETFs (GLD/IAU/SLV) ------------------------
+
+def yahoo_quote_symbols(symbols: List[str]) -> Dict[str, dict]:
+    url = "https://query1.finance.yahoo.com/v7/finance/quote"
+    r = http_get(url, params={"symbols": ",".join(symbols)})
+    out = {}
+    if not r:
+        return out
+    try:
+        data = r.json().get("quoteResponse", {}).get("result", [])
+        for it in data:
+            out[it.get("symbol")] = it
+    except Exception:
+        return out
+    return out
+
+def etf_flows_proxy() -> Dict[str, Any]:
+    info = yahoo_quote_symbols(["GLD","IAU","SLV"])
+    def pick(sym):
+        x = info.get(sym, {})
+        return {
+            "price": safe_float(x.get("regularMarketPrice")),
+            "shares_outstanding": safe_float(x.get("sharesOutstanding")),
+            "total_assets": safe_float(x.get("totalAssets")),
+            "nav_price": safe_float(x.get("navPrice")),
+            "source": "Yahoo"
+        }
+    return {"GLD": pick("GLD"), "IAU": pick("IAU"), "SLV": pick("SLV")}
+
+# ------------------------ COT (CFTC) via Nasdaq Data Link ------------------------
+
+def normalize_key(s: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", s.lower()).strip("_")
+
+def cftc_cot_gold_net() -> Optional[Dict[str, Any]]:
+    """
+    Nasdaq Data Link — Legacy Futures Only (ouro COMEX):
+      CFTC/088691_FO_L_ALL
+    Calcula Non-Commercial Net, Commercial Net, OI e % de participação (aprox.).
+    """
+    key = os.environ.get("NASDAQ_DATA_LINK_API_KEY","")
+    if not key:
+        return None
+    url = "https://data.nasdaq.com/api/v3/datasets/CFTC/088691_FO_L_ALL.json"
+    r = http_get(url, params={"api_key": key})
+    if not r:
+        return None
+    try:
+        ds = r.json().get("dataset", {})
+        cols = ds.get("column_names", [])
+        data = ds.get("data", [])
+        if not data:
+            return None
+        latest = data[0]
+        colmap = {normalize_key(c): i for i, c in enumerate(cols)}
+
+        def getv(*candidates):
+            for c in candidates:
+                i = colmap.get(c)
+                if i is not None and i < len(latest):
+                    v = safe_float(latest[i])
+                    if v is not None:
+                        return v
+            return None
+
+        nc_long = getv("noncommercial_long", "non_commercial_long", "noncommercial_positions_long_all")
+        nc_short = getv("noncommercial_short", "non_commercial_short", "noncommercial_positions_short_all")
+        c_long  = getv("commercial_long", "commercial_positions_long_all")
+        c_short = getv("commercial_short", "commercial_positions_short_all")
+        spreads = getv("noncommercial_spreads", "spreads", "noncommercial_positions_spreading_all", "spreading")
+        oi_all  = getv("open_interest_all", "open_interest__all")
+
+        nc_net = (nc_long or 0) - (nc_short or 0)
+        com_net = (c_long or 0) - (c_short or 0)
+
+        part_nc = None
+        if oi_all and (nc_long or nc_short or spreads):
+            part_nc = 100.0 * ((nc_long or 0) + (nc_short or 0) + (spreads or 0)) / oi_all
+
+        return {
+            "available": True,
+            "date": latest[0] if isinstance(latest[0], str) else None,
+            "noncommercial_long": nc_long,
+            "noncommercial_short": nc_short,
+            "noncommercial_net": nc_net,
+            "commercial_long": c_long,
+            "commercial_short": c_short,
+            "commercial_net": com_net,
+            "spreads": spreads,
+            "open_interest_all": oi_all,
+            "noncommercial_participation_pct_approx": part_nc,
+            "source": "Nasdaq Data Link CFTC/088691_FO_L_ALL"
+        }
+    except Exception:
+        return None
+
+# ------------------------ World Bank: Macro & Reservas ------------------------
+
+def wb_latest_indicator(indicator: str, country: str = "WLD", start_year: int = 2000, end_year: int = 2100):
+    url = f"https://api.worldbank.org/v2/country/{country}/indicator/{indicator}"
+    params = {"format": "json", "per_page": 1, "date": f"{start_year}:{end_year}"}
+    r = http_get(url, params=params, timeout=30)
+    if not r:
+        return None
+    try:
+        data = r.json()
+        if not isinstance(data, list) or len(data) < 2 or not data[1]:
+            return None
+        entry = data[1][0]
+        date_year = entry.get("date")
+        val = entry.get("value")
+        if val is None:
+            return None
+        date_iso = f"{date_year}-12-31"
+        return (date_iso, float(val))
+    except Exception:
+        return None
+
+def wb_global_macro_drivers() -> Dict[str, Any]:
+    gdp = wb_latest_indicator("NY.GDP.MKTP.KD.ZG","WLD")
+    cpi = wb_latest_indicator("FP.CPI.TOTL.ZG","WLD")
+    return {
+        "global_gdp_growth_pct": gdp[1] if gdp else None,
+        "global_gdp_growth_date": gdp[0] if gdp else None,
+        "global_inflation_cpi_pct": cpi[1] if cpi else None,
+        "global_inflation_cpi_date": cpi[0] if cpi else None,
+        "source": "World Bank"
+    }
+
+def wb_central_bank_gold_value_usd() -> Dict[str, Any]:
+    tot = wb_latest_indicator("FI.RES.TOTL.CD","WLD")
+    exg = wb_latest_indicator("FI.RES.XGLD.CD","WLD")
+    if not tot or not exg:
+        return {"gold_value_usd": None, "date_total": tot[0] if tot else None, "date_exgold": exg[0] if exg else None, "source": "World Bank"}
+    gold_val = max(0.0, float(tot[1]) - float(exg[1]))
+    return {"gold_value_usd": gold_val, "date_total": tot[0], "date_exgold": exg[0], "source": "World Bank"}
+
+def wb_gold_value_to_tonnes(gold_value_usd: float, xauusd_spot: float) -> Optional[float]:
+    if not gold_value_usd or not xauusd_spot or xauusd_spot <= 0:
+        return None
+    troy_oz = gold_value_usd / xauusd_spot
+    tonnes = troy_oz / 32150.7466
+    return tonnes
+
+# ------------------------ FRED: Macro drivers ------------------------
+
+def fred_series_last(series_id: str) -> Optional[Tuple[str,float]]:
+    key = os.environ.get("FRED_API_KEY","")
+    if not key:
+        return None
+    url = "https://api.stlouisfed.org/fred/series/observations"
+    r = http_get(url, params={"series_id": series_id, "file_type": "json", "api_key": key})
+    if not r:
+        return None
+    try:
+        obs = r.json().get("observations", [])
+        for row in reversed(obs):
+            val = row.get("value")
+            if val not in (None, ".", ""):
+                return (row.get("date"), float(val))
+    except Exception:
+        return None
+    return None
+
+def macro_from_fred() -> Dict[str, Any]:
+    out = {}
+    pairs = {
+        "real_yield_10y": "DFII10",
+        "dollar_dtwexbgs": "DTWEXBGS",
+        "fed_funds": "FEDFUNDS",
+    }
+    for k, sid in pairs.items():
+        res = fred_series_last(sid)
+        if res:
+            out[k] = {"date": res[0], "value": res[1], "series": sid, "source": "FRED"}
+        else:
+            out[k] = {"date": None, "value": None, "series": sid, "source": "FRED"}
+    return out
+
+# ------------------------ Estrutura a termo (GC=F) ------------------------
+
+def yahoo_gc_future() -> Dict[str, Any]:
+    q = yahoo_quote_symbols(["GC=F"])
+    gc = q.get("GC=F", {})
+    return {
+        "last": safe_float(gc.get("regularMarketPrice") or gc.get("postMarketPrice")),
+        "change": safe_float(gc.get("regularMarketChange")),
+        "change_pct": safe_float(gc.get("regularMarketChangePercent")),
+        "source": "Yahoo"
+    }
+
+# ------------------------ Correlações: metais (SI=F, HG=F) ------------------------
+
+def yahoo_correlation_inputs() -> Dict[str, Any]:
+    """
+    Correlações mais pertinentes a metais:
+      - Prata (SI=F)
+      - Cobre (HG=F)
+    Obs.: DXY e juros reais já vêm do FRED (macro_from_fred).
+    """
+    q = yahoo_quote_symbols(["SI=F", "HG=F"])
+    si = q.get("SI=F", {})
+    hg = q.get("HG=F", {})
+    return {
+        "silver": {"symbol": "SI=F", "last": safe_float(si.get("regularMarketPrice")), "source": "Yahoo"},
+        "copper": {"symbol": "HG=F", "last": safe_float(hg.get("regularMarketPrice")), "source": "Yahoo"},
+    }
+
+# ------------------------ SEC EDGAR: AISC amostra ------------------------
+
+SEC_TICKER_INDEX_URL = "https://www.sec.gov/files/company_tickers.json"
+
+def _sec_headers() -> dict:
+    ua = os.environ.get("SEC_USER_AGENT") or "metals-reports (contact: you@example.com)"
+    return {"User-Agent": ua, "Accept-Encoding":"gzip, deflate", "Host":"data.sec.gov"}
+
+def _get_ticker_index() -> Dict[str,str]:
+    r = http_get(SEC_TICKER_INDEX_URL, headers=_sec_headers(), timeout=30)
+    if not r:
+        return {}
+    try:
+        data = r.json()
+        return {v["ticker"].upper(): f'{int(v["cik_str"]):010d}' for v in data.values()}
+    except Exception:
+        return {}
+
+def _sec_company_submissions(cik10: str) -> Optional[dict]:
+    url = f"https://data.sec.gov/submissions/CIK{cik10}.json"
+    r = http_get(url, headers=_sec_headers(), timeout=30)
+    if not r:
+        return None
+    try:
+        return r.json()
+    except Exception:
+        return None
+
+def _build_filing_url(cik10: str, accession_no: str, primary_doc: str) -> str:
+    return (
+        f"https://www.sec.gov/Archives/edgar/data/{int(cik10)}/"
+        f"{accession_no.replace('-', '')}/"
+        f"{primary_doc}"
+    )
+
+_AISC_PATTERNS = [
+    r"all[- ]in sustaining (?:costs?|AISC)[^$%]{0,80}\$?\s*([0-9]{3,5})(?:\s*/?\s*oz|\s*per\s*oz)",
+    r"AISC[^$%]{0,80}\$?\s*([0-9]{3,5})(?:\s*/?\s*oz|\s*per\s*oz)"
+]
+
+def _extract_aisc_usd_per_oz_from_text(text: str) -> Optional[float]:
+    t = re.sub(r"\s+", " ", text, flags=re.S)
+    for pat in _AISC_PATTERNS:
+        m = re.search(pat, t, flags=re.I)
+        if m:
+            try:
+                val = int(m.group(1).replace(",", ""))
+                if 300 <= val <= 3000:
+                    return float(val)
+            except Exception:
+                pass
+    return None
+
+def _fetch_text(url: str) -> Optional[str]:
+    h = _sec_headers().copy()
+    h["Accept"] = "text/html,*/*"
+    r = http_get(url, headers=h, timeout=30)
+    if not r:
+        return None
+    return r.text
+
+def edgar_latest_aisc_for_tickers(tickers=("NEM","GOLD"), forms=("10-Q","10-K"), max_check=8) -> Dict[str, Any]:
+    out = {}
+    idx = _get_ticker_index()
+    for tk in tickers:
+        cik10 = idx.get(tk.upper())
+        if not cik10:
+            out[tk.upper()] = {"aisc_usd_oz": None, "source_url": None}
+            continue
+        subs = _sec_company_submissions(cik10)
+        if not subs or "filings" not in subs or "recent" not in subs["filings"]:
+            out[tk.upper()] = {"aisc_usd_oz": None, "source_url": None}
+            continue
+        recent = subs["filings"]["recent"]
+        forms_list   = recent.get("form", [])
+        acc_nums     = recent.get("accessionNumber", [])
+        primary_docs = recent.get("primaryDocument", [])
+        got = False
+        for i, f in enumerate(forms_list[:max_check]):
+            if f not in forms: 
+                continue
+            if i >= len(acc_nums) or i >= len(primary_docs):
+                continue
+            url = _build_filing_url(cik10, acc_nums[i], primary_docs[i])
+            html_txt = _fetch_text(url)
+            if not html_txt:
+                continue
+            val = _extract_aisc_usd_per_oz_from_text(html_txt)
+            if val:
+                out[tk.upper()] = {"aisc_usd_oz": val, "source_url": url}
+                got = True
+                break
+        if not got:
+            out[tk.upper()] = {"aisc_usd_oz": None, "source_url": None}
+    return out
+
+# ------------------------ USGS: Produção mundial (MCS XLSX) ------------------------
+
+USGS_GOLD_PAGE = "https://www.usgs.gov/centers/nmic/gold-statistics-and-information"
+
+def find_latest_usgs_gold_xlsx() -> Optional[str]:
+    r = http_get(USGS_GOLD_PAGE, timeout=40)
+    if not r:
+        return None
+    soup = BeautifulSoup(r.text, "lxml")
+    candidates = []
+    for a in soup.find_all("a", href=True):
+        href = a["href"]
+        href_l = href.lower()
+        if href_l.endswith(".xlsx") and ("gold" in href_l or "au" in href_l) and ("mcs" in href_l or "commodity" in href_l):
+            candidates.append(href)
+    norm = []
+    for h in candidates:
+        if h.startswith("http"):
+            norm.append(h)
+        else:
+            norm.append("https://www.usgs.gov" + h if h.startswith("/") else "https://www.usgs.gov/" + h)
+    def extract_year(s: str) -> int:
+        m = re.search(r"(20\d{2})", s)
+        return int(m.group(1)) if m else 0
+    norm.sort(key=lambda s: extract_year(s), reverse=True)
+    return norm[0] if norm else None
+
+def parse_world_production_from_xlsx(xlsx_bytes: bytes) -> Optional[Dict[str, Any]]:
+    try:
+        xl = pd.ExcelFile(io.BytesIO(xlsx_bytes))
+    except Exception:
+        return None
+    target_patterns = [r"world.*mine.*production", r"world.*production", r"world.*total"]
+    for sheet in xl.sheet_names:
+        try:
+            df = xl.parse(sheet, header=None)
+        except Exception:
+            continue
+        df_str = df.astype(str).applymap(lambda x: x.strip().lower())
+        for ridx in range(df_str.shape[0]):
+            row_text = " ".join(df_str.iloc[ridx, :].tolist())
+            if any(re.search(p, row_text) for p in target_patterns):
+                row_vals = df.iloc[ridx, :].tolist()
+                for val in reversed(row_vals):
+                    try:
+                        num = float(str(val).replace(",", "").replace(" ", ""))
+                        if num > 0:
+                            return {"sheet": sheet, "row": ridx, "world_mine_production_tonnes": num}
+                    except Exception:
+                        continue
+    return None
+
+def usgs_world_gold_production() -> Optional[Dict[str, Any]]:
+    try:
+        xlsx_url = find_latest_usgs_gold_xlsx()
+        if not xlsx_url:
+            return None
+        r = http_get(xlsx_url, timeout=60)
+        if not r:
+            return None
+        parsed = parse_world_production_from_xlsx(r.content)
+        if parsed:
+            parsed["xlsx_url"] = xlsx_url
+            parsed["source"] = "USGS MCS (XLSX)"
+            return parsed
+    except Exception:
+        return None
+    return None
+
+# ------------------------ LLM (Groq) & Telegram ------------------------
+
+def build_prompt(data_str: str, numero: int, metrics: Dict[str, Any], label: str) -> str:
+    header = f"Dados — Ouro (XAU) — {data_str} — {label} — Nº {numero}"
     rules = (
-        "Você é um analista sênior de macro e commodities. Escreva em português do Brasil, claro e institucional.\n"
+        "Você é um analista sênior de metais. Escreva em português (Brasil), tom institucional, conciso e acionável.\n"
         "TÍTULO (linha única):\n" + header + "\n\n"
         "REGRAS:\n"
-        "- Use os dados do JSON exatamente como vierem; se algum campo estiver ausente, não invente números — descreva qualitativamente.\n"
-        "- Sem links; inclua a data completa no primeiro parágrafo.\n"
-        "- Estrutura fixa (na ordem):\n"
-        "  1) Fluxos em ETFs de Ouro (GLD, IAU, etc.)\n"
-        "  2) Posição Líquida em Futuros (CFTC/CME)\n"
-        "  3) Reservas de Bancos Centrais\n"
-        "  4) Fluxos de Mineradoras & Bancos (produção, hedge, OTC)\n"
-        "  5) Whale Ratio Institucional vs. Varejo (participação relativa)\n"
-        "  6) Drivers Macro (taxa real, DXY, política monetária, geopolítica)\n"
-        "  7) Custos de Produção & Oferta Física (AISC, supply)\n"
-        "  8) Estrutura a Termo (contango/backwardation LBMA/COMEX)\n"
-        "  9) Correlações Cruzadas (DXY, S&P500, BTC)\n"
-        "  10) Interpretação Executiva & Conclusão — 5–8 bullets + síntese\n\n"
+        "- Use APENAS os dados fornecidos em JSON (não invente números). Se faltar dado, descreva qualitativamente.\n"
+        "- Estrutura fixa (10 seções, nesta ordem):\n"
+        "  1) Preço Spot (XAU/USD) & Origem do Dado\n"
+        "  2) Fluxos em ETFs (GLD/IAU/SLV)\n"
+        "  3) Posição em Futuros (CFTC COT)\n"
+        "  4) Reservas de Bancos Centrais\n"
+        "  5) Produção/Oferta (World Bank/USGS)\n"
+        "  6) Whale Ratio (proxy via COT + ETFs)\n"
+        "  7) Drivers Macro — real yield, DXY, PIB/inflação globais\n"
+        "  8) Estrutura a Termo (GC=F)\n"
+        "  9) Correlações Cruzadas — DXY (FRED), prata (SI=F) e cobre (HG=F)\n"
+        " 10) Conclusão — 4–6 bullets executivos\n\n"
         "DADOS (JSON):\n"
     )
     return rules + json.dumps(metrics, ensure_ascii=False, indent=2)
 
-# =========================
-# LLM (Groq)
-# =========================
-def llm_generate_groq(model: str, prompt: str, api_key: str) -> Optional[str]:
+def groq_generate(prompt: str) -> Optional[str]:
+    key = os.environ.get("GROQ_API_KEY","")
+    if not key:
+        return None
     url = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    for mdl in [model, "llama-3.1-70b-versatile", "llama-3.1-8b-instant", "gemma2-9b-it"]:
-        if not mdl: continue
-        payload = {"model": mdl,
-                   "messages":[{"role":"system","content":"Você escreve relatórios institucionais em português do Brasil."},
-                               {"role":"user","content":prompt}],
-                   "temperature":0.35,"max_tokens":1800}
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+    payload = {
+        "model": "llama-3.1-70b-versatile",
+        "messages": [
+            {"role":"system","content":"Você é um analista financeiro sênior e escreve em português do Brasil, com precisão e sobriedade."},
+            {"role":"user","content": prompt}
+        ],
+        "temperature": 0.35,
+        "max_tokens": 1800
+    }
+    try:
         r = requests.post(url, headers=headers, json=payload, timeout=120)
-        if r.status_code in (401,403,429): return None
         if r.status_code == 200:
-            try: return r.json()["choices"][0]["message"]["content"]
-            except Exception: pass
+            return r.json()["choices"][0]["message"]["content"]
+    except Exception:
+        return None
     return None
 
-# =========================
-# TELEGRAM
-# =========================
-def _chunk_message(text: str, limit: int = 3900) -> List[str]:
+def chunk_text(text: str, limit: int = 3900) -> List[str]:
     parts: List[str] = []
     for block in text.split("\n\n"):
         b = block.strip()
         if not b:
-            if parts and not parts[-1].endswith("\n\n"): parts[-1] += "\n\n"
             continue
         if len(b) <= limit:
             if not parts: parts.append(b)
@@ -235,131 +645,135 @@ def _chunk_message(text: str, limit: int = 3900) -> List[str]:
         else:
             acc = ""
             for line in b.splitlines():
-                if len(acc) + len(line) + 1 <= limit: acc += (("\n" if acc else "") + line)
+                if len(acc) + len(line) + 1 <= limit:
+                    acc += (("\n" if acc else "") + line)
                 else:
                     if acc: parts.append(acc)
                     acc = line
             if acc: parts.append(acc)
     return parts if parts else ["(vazio)"]
 
-def telegram_send_messages(token: str, chat_id: str, messages: List[str], topic_id: Optional[int]=None):
+def telegram_send(html_text: str) -> bool:
+    token = os.environ.get("TELEGRAM_BOT_TOKEN","")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID_METALS","")
+    if not token or not chat_id:
+        return False
     base = f"https://api.telegram.org/bot{token}/sendMessage"
-    for msg in messages:
+    parts = chunk_text(html_text, limit=3900)
+    ok = True
+    for msg in parts:
         data = {"chat_id": chat_id, "text": msg, "disable_web_page_preview": True, "parse_mode": "HTML"}
-        if topic_id: data["message_thread_id"] = topic_id
-        r = requests.post(base, data=data, timeout=60)
-        if r.status_code != 200:
-            raise RuntimeError(f"Telegram error: HTTP {r.status_code} — {r.text[:200]}")
-        time.sleep(0.5)
+        try:
+            resp = requests.post(base, data=data, timeout=60)
+            ok = ok and (resp.status_code == 200)
+            time.sleep(0.6)
+        except Exception:
+            ok = False
+    return ok
 
-# =========================
-# MAIN
-# =========================
+# ------------------------ MAIN ------------------------
+
 def main():
-    load_env_if_present()
-    ap = argparse.ArgumentParser(description="Relatório OURO (XAU/USD) — dados reais + Groq → Telegram")
-    ap.add_argument("--date", help="YYYY-MM-DD (opcional)")
-    ap.add_argument("--start-counter", type=int, default=1)
-    ap.add_argument("--counter-file", default=os.path.join(os.path.dirname(__file__), "counters-xau.json"))
+    import argparse
+    ap = argparse.ArgumentParser(description="Relatório Metals — OURO (diário/semanal/mensal)")
     ap.add_argument("--period", choices=["daily","weekly","monthly"], default="daily")
-    ap.add_argument("--send-as", choices=["message","both"], default="message")
-    ap.add_argument("--chat-id", help="Override do chat id (Telegram)")
-    ap.add_argument("--topic-id", type=int, help="message_thread_id (opcional)")
-    ap.add_argument("--model", default=os.environ.get("MODEL","llama-3.1-70b-versatile"))
-    ap.add_argument("--hist-corr", action="store_true", help="Calcula correlação GLD vs DXY (30d)")
+    ap.add_argument("--send", choices=["yes","no"], default="yes")
     args = ap.parse_args()
 
-    tg_token = os.environ.get("TELEGRAM_BOT_TOKEN","")
-    tg_chat  = args.chat_id or os.environ.get("TELEGRAM_CHAT_ID_METALS","")
-    tg_topic = args.topic_id
+    # Anti-duplicação por período
+    if guard_already_sent(args.period):
+        print("[skip] Relatório já enviado hoje para", args.period)
+        return
 
-    if args.send_as in ("message","both") and (not tg_token or not tg_chat):
-        raise SystemExit("Defina TELEGRAM_BOT_TOKEN e TELEGRAM_CHAT_ID_METALS (ou passe --chat-id).")
+    data_str = today_brt_str_long()
+    label_map = {"daily":"Diário","weekly":"Semanal","monthly":"Mensal"}
+    label = label_map.get(args.period, "Diário")
 
-    # .sent (na raiz do repo)
-    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    sent_dir  = os.path.join(repo_root, ".sent")
-    if sent_exists(sent_dir, args.period):
-        raise SystemExit(f"[skip] marcador .sent já existe para {args.period}")
+    # 1) Spot XAUUSD com fallback
+    spot, spot_source = get_spot_xauusd()
 
-    label_map = {"daily": "Diário", "weekly": "Semanal", "monthly": "Mensal"}
-    key_map   = {"daily": "diario", "weekly": "semanal", "monthly": "mensal"}
-    label     = label_map[args.period]
-    key       = key_map[args.period]
+    # 2) ETFs GLD/IAU/SLV (proxy de fluxos)
+    etfs = etf_flows_proxy()
 
-    data_str  = iso_to_brt_human(args.date) if args.date else today_brt_str()
-    numero    = 1  # contador opcional; pode usar counters-xau.json se quiser
-    # ==== COLETAS ====
-    groq_key  = os.environ.get("GROQ_API_KEY","")
-    fred_key  = os.environ.get("FRED_API_KEY","")
-    gold_key  = os.environ.get("GOLDAPI_KEY","")
+    # 3) COT (Nasdaq Data Link)
+    cot = cftc_cot_gold_net() or {"available": False, "note": "Sem leitura (COT) nesta execução."}
 
-    metrics: Dict[str, Any] = {}
+    # 4) Reservas & tonelagem (World Bank)
+    wb_res = wb_central_bank_gold_value_usd()
+    gold_tonnes = wb_gold_value_to_tonnes(wb_res.get("gold_value_usd"), spot) if spot and wb_res.get("gold_value_usd") else None
 
-    # spot
-    metrics["spot"] = {"xauusd": spot_xauusd(gold_key), "unit": "USD/oz"}
+    # 5) Produção/Oferta — USGS (MCS XLSX)
+    usgs_prod = usgs_world_gold_production() or {"world_mine_production_tonnes": None, "source": "USGS (indisponível nesta execução)"}
 
-    # ETFs
-    metrics["etf_flows"] = {"gld_shares": gld_shares_outstanding(), "iau_shares": iau_shares_outstanding(), "unit": "shares"}
+    # 6) Whale Ratio (proxy via COT + ETFs)
+    whale_proxy = {
+        "method": "Proxy COT (non-commercial vs commercial) + direção de ETFs (GLD/IAU)",
+        "available_cot": bool(cot and cot.get("available", False)),
+        "source": ["CFTC/Nasdaq DL", "Yahoo"]
+    }
 
-    # COT
-    cot = cftc_gold_legacy_latest()
-    if cot:
-        metrics["cftc_futures_position"] = {
-            "as_of": cot.get("as_of"),
-            "speculators_net_long": cot.get("noncomm_net"),
-            "noncomm_long": cot.get("noncomm_long"),
-            "noncomm_short": cot.get("noncomm_short"),
-            "unit": "contratos"
+    # 7) Drivers macro (FRED + WB)
+    fred = macro_from_fred()
+    wb_macro = wb_global_macro_drivers()
+
+    # 8) Estrutura a termo (GC=F)
+    term = yahoo_gc_future()
+
+    # 9) Correlações (inputs) — metais
+    corr = yahoo_correlation_inputs()
+
+    # 10) AISC (amostra via EDGAR)
+    try:
+        tickers = [t.strip() for t in os.environ.get("AISC_TICKERS","NEM,GOLD").split(",") if t.strip()]
+        aisc = edgar_latest_aisc_for_tickers(tickers=tickers)
+        aisc_vals = [v["aisc_usd_oz"] for v in aisc.values() if v.get("aisc_usd_oz")]
+        aisc_avg = round(sum(aisc_vals)/len(aisc_vals),2) if aisc_vals else None
+    except Exception:
+        aisc, aisc_avg = {}, None
+
+    metrics = {
+        "as_of_date_brt": ymd(today_brt()),
+        "spot": {"xauusd": spot, "unit": "USD/oz", "source": spot_source},
+        "etf_flows_proxy": etfs,
+        "futures_cot": cot,
+        "central_bank_reserves": {
+            "gold_value_usd": wb_res.get("gold_value_usd"),
+            "gold_value_usd_date_total": wb_res.get("date_total"),
+            "gold_value_usd_date_exgold": wb_res.get("date_exgold"),
+            "gold_implied_tonnes": gold_tonnes,
+            "source": wb_res.get("source")
+        },
+        "supply_proxy": {
+            "world_mine_production_tonnes": usgs_prod.get("world_mine_production_tonnes"),
+            "usgs_sheet": usgs_prod.get("sheet"),
+            "usgs_xlsx_url": usgs_prod.get("xlsx_url"),
+            "source": usgs_prod.get("source", "USGS")
+        },
+        "whale_ratio_proxy": whale_proxy,
+        "macro_fred": fred,
+        "macro_world_bank": wb_macro,
+        "term_structure_gc": term,
+        "correlation_inputs": corr,
+        "production_cost": {
+            "aisc_samples": aisc,
+            "aisc_avg_usd_oz": aisc_avg,
+            "source": "SEC EDGAR (10-Q/10-K, regex)"
         }
+    }
 
-    # FRED
-    if fred_key:
-        ry = fred_series_latest("DFII10", fred_key)
-        dx = fred_series_latest("DTWEXBGS", fred_key)
-        metrics["macro_drivers"] = {
-            "real_yield_10y": ry[1] if ry else None,
-            "real_yield_10y_date": ry[0] if ry else None,
-            "dxy_broad": dx[1] if dx else None,
-            "dxy_broad_date": dx[0] if dx else None,
-        }
+    numero = int(datetime.now().timestamp()) % 100000
+    prompt = build_prompt(data_str, numero, metrics, label)
+    content = groq_generate(prompt) or "⚠️ Não foi possível gerar a interpretação automática hoje. Utilize as métricas acima como base."
+
+    titulo = f"📊 <b>Dados — Ouro — {data_str} — {label} — Nº {numero}</b>"
+    corpo_seguro = html.escape(content, quote=False)
+    full_msg = f"{titulo}\n\n{corpo_seguro}"
+
+    if args.send == "yes":
+        ok = telegram_send(full_msg)
+        print("[telegram]", "ok" if ok else "falhou")
     else:
-        metrics["macro_drivers"] = {"real_yield_10y": None, "dxy_broad": None, "note": "Informe FRED_API_KEY para números oficiais"}
-
-    term = gold_contango_6m()
-    metrics["term_structure"] = term if term else {"contango_usd": None, "note": "Falha em GC=F ou contrato +6m"}
-
-    # placeholders
-    metrics["central_bank_reserves"] = {"monthly_change_tonnes": None, "ytd_tonnes": None}
-    metrics["miners_banks"] = {"hedge_ratio": None, "production_qoq_pct": None}
-    metrics["institution_vs_retail"] = {"institutional_share": None, "retail_share": None}
-    metrics["production_cost"] = {"aisc_avg_usd_oz": None}
-    metrics["correlations"] = {"gold_dxy_30d": None}
-
-    # ==== LLM ====
-    prompt  = build_prompt_xau(data_str, numero, metrics, label)
-    content = llm_generate_groq(args.model, prompt, groq_key)
-
-    if not content:
-        corpo = textwrap.dedent(f"""
-        ⚠️ Não foi possível gerar o relatório automático hoje.
-        Data: {data_str} — {label} — Nº {numero} — XAU
-
-        Métricas coletadas (JSON):
-        {json.dumps(metrics, ensure_ascii=False, indent=2)}
-        """).strip()
-    else:
-        corpo = content.strip()
-
-    titulo = f"📊 <b>Dados de Mercado — Ouro (XAU/USD) — {data_str} — {label} — Nº {numero}</b>"
-    full = f"{titulo}\n\n{html.escape(corpo, quote=False)}"
-
-    if args.send_as in ("message","both"):
-        msgs = _chunk_message(full, 3900)
-        telegram_send_messages(os.environ.get("TELEGRAM_BOT_TOKEN",""), tg_chat, msgs, topic_id=tg_topic)
-        # cria marcador .sent
-        mpath = mark_sent(sent_dir, args.period, note="xau sent")
-        print(f"[ok] Enviado | marker: {mpath}")
+        print(full_msg)
 
 if __name__ == "__main__":
     main()
