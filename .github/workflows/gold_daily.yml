@@ -2,7 +2,8 @@ name: Gold Daily
 
 on:
   schedule:
-    - cron: "25 09 * * *"   # antes era 15 09 — agora +10 min de margem
+    # roda às 09:25 UTC (deslocado para evitar colisão)
+    - cron: "25 09 * * *"
   workflow_dispatch:
 
 jobs:
@@ -28,16 +29,26 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Small buffer (sleep 3 min)
-        run: sleep 180
+      - name: Random jitter (10–50s)
+        run: python - << 'PY'
+import random, time
+s = random.randint(10, 50)
+print(f"Sleeping {s}s to avoid collisions...")
+time.sleep(s)
+PY
+
+      - name: Small buffer (sleep 2 min)
+        run: sleep 120
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Install deps
-        run: pip install -r requirements.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install -r requirements.txt
 
       - name: Run daily gold report
         run: python scripts/gold_report.py --period daily --send yes
