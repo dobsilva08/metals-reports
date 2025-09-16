@@ -13,6 +13,7 @@ pytz>=2024.1
 # --- Finance / Mercados ---
 yfinance>=0.2.40
 nasdaq-data-link>=0.2.0   # cliente oficial do Nasdaq Data Link (Quandl)
+alpha_vantage>=2.3.1      # integração com Alpha Vantage
 
 # --- Scraping / HTML ---
 beautifulsoup4>=4.12
