@@ -3,7 +3,7 @@ name: Gold Daily
 on:
   workflow_dispatch:
   schedule:
-    # 12:15 UTC (~09:15 BRT) - ajuste conforme preferir
+    # 12:15 UTC (~09:15 BRT) — ajuste conforme preferir
     - cron: "15 12 * * *"
 
 jobs:
@@ -20,7 +20,7 @@ jobs:
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID_METALS: ${{ secrets.TELEGRAM_CHAT_ID_METALS }}
 
-      # --- Dados ---
+      # --- Dados / APIs externas ---
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       NASDAQ_DATA_LINK_API_KEY: ${{ secrets.NASDAQ_DATA_LINK_API_KEY }}
       GOLDAPI_KEY: ${{ secrets.GOLDAPI_KEY }}
@@ -28,13 +28,14 @@ jobs:
       METALS_DEV_API: ${{ secrets.METALS_DEV_API }}
       METAL_PRICE_API: ${{ secrets.METAL_PRICE_API }}
 
-      # --- Outros ---
-      SEC_USER_AGENT: "Mozilla/5.0 (compatible; HubRelatorios/1.0)"
+      # --- Config do relatório ---
+      SEC_USER_AGENT: "metals-reports/1.0 (+github actions)"
+      # Tickers de mineradoras para AISC proxy (pode editar/expandir)
       AISC_TICKERS: "NEM,GOLD"
 
     steps:
       - name: Checkout
-      - uses: actions/checkout@v4
+        uses: actions/checkout@v4
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -60,3 +61,15 @@ jobs:
       - name: Run daily gold report
         run: |
           python scripts/gold_report.py
+
+      # Opcional: subir artefatos (logs/JSON do dia) para debug
+      - name: Upload report artifacts (optional)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gold_report_artifacts
+          path: |
+            .sent/
+            tmp/
+          if-no-files-found: ignore
+```0
