@@ -1,9 +1,9 @@
 name: Gold Daily
-run-name: "Gold Daily — ${{ github.event_name }} #${{ github.run_number }}"
+run-name: "Gold Daily — Relatório Diário #${{ github.run_number }}"
 
 on:
   schedule:
-    - cron: "25 09 * * *"  # 09:25 UTC
+    - cron: "25 09 * * *"  # 09:25 UTC (deslocado para evitar colisões)
   workflow_dispatch:
 
 jobs:
@@ -25,6 +25,7 @@ jobs:
       METAL_PRICE_API: ${{ secrets.METAL_PRICE_API }}
       SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
       AISC_TICKERS: "NEM,GOLD"
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -44,6 +45,17 @@ PY
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: "requirements.txt"
+
+      # cache extra (opcional) — útil caso use outras versões de Python
+      - name: Cache pip (fallback)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-py311-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            pip-${{ runner.os }}-py311-
 
       - name: Install dependencies
         run: |
