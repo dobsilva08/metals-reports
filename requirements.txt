@@ -1,27 +1,14 @@
-# --- Núcleo de dados / cálculo ---
-pandas>=2.0
-numpy>=1.26
+# Core HTTP
+requests>=2.31.0
 
-# --- HTTP / Retentativas ---
-requests>=2.31
-tenacity>=8.2
-
-# --- Datas / Fuso ---
-python-dateutil>=2.8
+# Data stack
+pandas>=2.2.2
+numpy>=1.26.4
+python-dateutil>=2.9.0.post0
 pytz>=2024.1
 
-# --- Finance / Mercados ---
-yfinance>=0.2.40
-nasdaq-data-link>=0.2.0   # cliente oficial do Nasdaq Data Link (Quandl)
-alpha_vantage>=2.3.1      # integração com Alpha Vantage
+# Mercados
+yfinance>=0.2.43
 
-# --- Scraping / HTML ---
-beautifulsoup4>=4.12
-lxml>=4.9
-html5lib>=1.1
-
-# --- Planilhas (ler .xlsx do USGS, etc.) ---
-openpyxl>=3.1
-
-# --- Telegram (opcional; usamos requests, mas deixo disponível) ---
-python-telegram-bot>=20.6
+# Robustez (retries exponenciais)
+tenacity>=8.2.3
