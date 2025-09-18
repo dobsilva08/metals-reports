@@ -1,38 +1,48 @@
-name: Gold Daily
+name: Run daily gold report
 
 on:
-  workflow_dispatch:
   schedule:
-    # 12:15 UTC (~09:15 BRT) — ajuste se preferir
-    - cron: "15 12 * * *"
+    # ajuste se quiser outro horário; UTC
+    - cron: "15 11 * * *"
+  workflow_dispatch:
 
+# evita duas execuções simultâneas
 concurrency:
   group: gold-daily
   cancel-in-progress: false
-
-permissions:
-  contents: write
 
 jobs:
   run:
     runs-on: ubuntu-latest
 
     env:
-      # --- Telegram ---
+      # ====== Telegram (opcional) ======
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-      TELEGRAM_CHAT_ID_METALS: ${{ secrets.TELEGRAM_CHAT_ID_METALS }}
+      # Se você já usa este secret, mapeamos para o nome esperado internamente
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID_METALS }}
+      # (alternativamente, pode usar TELEGRAM_TO com @seu_canal)
+      # TELEGRAM_TO: ${{ secrets.TELEGRAM_TO }}
 
-      # --- Dados / APIs externas (todas as que já temos) ---
+      # ====== IA (opcional, com fallback automático) ======
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      # modelos/ordem podem ficar em Repository variables (ou em secrets)
+      OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
+      DEEPSEEK_MODEL: ${{ vars.DEEPSEEK_MODEL }}
+      GROQ_MODEL: ${{ vars.GROQ_MODEL }}
+      # Ex.: "groq,deepseek,openai" ou "openai" para usar só um
+      LLM_PROVIDER_ORDER: ${{ vars.LLM_PROVIDER_ORDER }}
+
+      # ====== APIs de dados (use as que tiver) ======
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
-      NASDAQ_DATA_LINK_API_KEY: ${{ secrets.NASDAQ_DATA_LINK_API_KEY }}
       GOLDAPI_KEY: ${{ secrets.GOLDAPI_KEY }}
-      ALPHA_VANTAGE_API_KEY: ${{ secrets.ALPHA_VANTAGE_API_KEY }}
       METALS_DEV_API: ${{ secrets.METALS_DEV_API }}
       METAL_PRICE_API: ${{ secrets.METAL_PRICE_API }}
+      NASDAQ_DATA_LINK_API_KEY: ${{ secrets.NASDAQ_DATA_LINK_API_KEY }}
 
-      # --- Config ---
-      SEC_USER_AGENT: "HubMetalsBot/1.0 (contact: your-email@example.com)"
-      AISC_TICKERS: "NEM,GOLD"  # lista de mineradoras para proxy de custo
+      SEC_USER_AGENT: HubMetalsBot/1.0 (contact: your-email@example.com)
+      AISC_TICKERS: NEM,GOLD
 
     steps:
       - name: Checkout
@@ -43,32 +53,22 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Cache pip
+      # preserva flags de envio e contador entre execuções
+      - name: Cache sent flags and counters
         uses: actions/cache@v4
         with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          path: |
+            .sent
+            counters
+          key: gold-state-${{ runner.os }}-${{ hashFiles('scripts/gold_report.py') }}
           restore-keys: |
-            ${{ runner.os }}-pip-
+            gold-state-${{ runner.os }}-
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
 
       - name: Run daily gold report
-        run: |
-          python scripts/gold_report.py
-
-      - name: Mark as sent (anti-duplicidade)
-        if: success()
-        run: |
-          set -e
-          TS="$(date -u +'%Y-%m-%d')"
-          mkdir -p .sent
-          echo "done" > ".sent/done-gold-daily-${TS}"
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add .sent/
-          git commit -m "chore(gold): mark daily sent ${TS} [skip ci]" || echo "Nada para commitar"
-          git push
+        run: python scripts/gold_report.py
