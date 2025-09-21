@@ -180,9 +180,13 @@ Seja específico e conciso, com foco em implicações de preço e contexto insti
 1) Fluxos em ETFs de Ouro (GLD/IAU)
 2) Posição Líquida em Futuros (CFTC/CME)
 3) Reservas (LBMA/COMEX) e Estoques
-4) Fluxos Institucionais e Notas de Bancos
-5) Interpretação Executiva (bullet points objetivos)
-6) Conclusão (1 parágrafo)
+4) Fluxos de Bancos Centrais
+5) Mercado de Mineração
+6) Câmbio e DXY (Dollar Index)
+7) Taxas de Juros e Treasuries
+8) Notas de Instituições Financeiras / Research
+9) Interpretação Executiva (bullet points objetivos, até 5 linhas)
+10) Conclusão (1 parágrafo, inclua leitura de curto e médio prazo)
 
 Baseie-se no contexto factual levantado:
 {contexto_textual}
