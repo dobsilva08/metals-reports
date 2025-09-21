@@ -12,3 +12,6 @@ yfinance>=0.2.43
 
 # Robustez (retries exponenciais)
 tenacity>=8.2.3
+
+# --- adicionar ao final do requirements.txt ---
+requests>=2.31.0
