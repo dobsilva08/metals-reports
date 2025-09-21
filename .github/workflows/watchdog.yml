@@ -2,7 +2,7 @@ name: Gold — Watchdog (Backup de Envio)
 
 on:
   schedule:
-    # Backup 3h depois do horário principal: 12:00 UTC ≙ 09:00 BRT
+    # 12:00 UTC ≙ 09:00 BRT — roda depois do principal
     - cron: "0 12 * * *"
   workflow_dispatch:
 
@@ -58,9 +58,9 @@ jobs:
         if: ${{ env.PIAPI_API_KEY != '' }}
         continue-on-error: true
         run: |
-          python scripts/providers/../tools/check_piapi.py
+          python scripts/tools/check_piapi.py
 
       - name: Rodar Watchdog (respeita trava .sent)
         run: |
-          # NÃO usa --force: se o envio principal já ocorreu, o .sent impede duplicidade
-          python scripts/gold_daily.py --send-telegram
+          # Não usa --force: se o envio principal já ocorreu, o .sent impede duplicidade
+          python ./scripts/gold_daily.py --send-telegram
