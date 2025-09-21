@@ -37,7 +37,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any, List
 
 # --- Importa o cliente LLM unificado com fallback ---
-from scripts.providers.llm_client import LLMClient
+from providers.llm_client import LLMClient
 
 try:
     import requests  # só para chamadas HTTP opcionais (FRED/GoldAPI/Telegram)
