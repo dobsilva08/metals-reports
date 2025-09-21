@@ -2,7 +2,7 @@ name: Gold — Relatório Diário (PIAPI + Fallback)
 
 on:
   schedule:
-    # 09:00 UTC ≙ 06:00 BRT (Brasil). Ajuste se quiser outro horário.
+    # 09:00 UTC ≙ 06:00 BRT
     - cron: "0 9 * * *"
   workflow_dispatch:
     inputs:
@@ -24,7 +24,7 @@ jobs:
       PIAPI_API_KEY: ${{ secrets.PIAPI_API_KEY }}
       PIAPI_MODEL: gpt-4o-mini
 
-      # Fallbacks (opcionais; preencha os secrets se quiser habilitar)
+      # Fallbacks (opcionais)
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       GROQ_MODEL: llama-3.1-70b-versatile
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -39,7 +39,6 @@ jobs:
       # ===== Telegram =====
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID_METALS: ${{ secrets.TELEGRAM_CHAT_ID_METALS }}
-      # Opcional: chat de teste e/ou tópico (threads)
       TELEGRAM_CHAT_ID_TEST: ${{ secrets.TELEGRAM_CHAT_ID_TEST }}
       TELEGRAM_MESSAGE_THREAD_ID: ${{ secrets.TELEGRAM_MESSAGE_THREAD_ID }}
 
@@ -65,17 +64,16 @@ jobs:
         if: ${{ env.PIAPI_API_KEY != '' }}
         continue-on-error: true
         run: |
-          python scripts/providers/../tools/check_piapi.py
+          python scripts/tools/check_piapi.py
 
-      # Execução em modo PREVIEW (se acionado manualmente com preview=true)
+      # PREVIEW manual (usa TELEGRAM_CHAT_ID_TEST, se definido)
       - name: Rodar Gold Diário (PREVIEW)
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.preview == true }}
         run: |
-          python scripts/gold_daily.py --send-telegram --preview
+          python ./scripts/gold_daily.py --send-telegram --preview
 
       # Execução normal (agendado OU manual preview=false)
       - name: Rodar Gold Diário
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.preview != true }}
         run: |
-          python scripts/gold_daily.py --send-telegram
-
+          python ./scripts/gold_daily.py --send-telegram
