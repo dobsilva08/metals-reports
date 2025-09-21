@@ -1,14 +1,18 @@
-name: Run daily gold report
+name: Gold — Relatório Diário (PIAPI + Fallback)
 
 on:
   schedule:
-    # ajuste se quiser outro horário; UTC
-    - cron: "15 11 * * *"
+    # 09:00 UTC ≙ 06:00 BRT (Brasil). Ajuste se quiser outro horário.
+    - cron: "0 9 * * *"
   workflow_dispatch:
+    inputs:
+      preview:
+        description: "Enviar para CHAT DE TESTE (se TELEGRAM_CHAT_ID_TEST estiver definido)"
+        type: boolean
+        default: false
 
-# evita duas execuções simultâneas
 concurrency:
-  group: gold-daily
+  group: metals-gold-daily
   cancel-in-progress: false
 
 jobs:
@@ -16,33 +20,32 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      # ====== Telegram (opcional) ======
-      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-      # Se você já usa este secret, mapeamos para o nome esperado internamente
-      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID_METALS }}
-      # (alternativamente, pode usar TELEGRAM_TO com @seu_canal)
-      # TELEGRAM_TO: ${{ secrets.TELEGRAM_TO }}
+      # ===== LLM (padrão: PIAPI) =====
+      PIAPI_API_KEY: ${{ secrets.PIAPI_API_KEY }}
+      PIAPI_MODEL: gpt-4o-mini
 
-      # ====== IA (opcional, com fallback automático) ======
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+      # Fallbacks (opcionais; preencha os secrets se quiser habilitar)
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-      # modelos/ordem podem ficar em Repository variables (ou em secrets)
-      OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
-      DEEPSEEK_MODEL: ${{ vars.DEEPSEEK_MODEL }}
-      GROQ_MODEL: ${{ vars.GROQ_MODEL }}
-      # Ex.: "groq,deepseek,openai" ou "openai" para usar só um
-      LLM_PROVIDER_ORDER: ${{ vars.LLM_PROVIDER_ORDER }}
+      GROQ_MODEL: llama-3.1-70b-versatile
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_MODEL: gpt-4o-mini
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+      DEEPSEEK_MODEL: deepseek-chat
 
-      # ====== APIs de dados (use as que tiver) ======
+      # Provedor preferido e ordem de fallback
+      LLM_PROVIDER: piapi
+      LLM_FALLBACK_ORDER: piapi,groq,openai,deepseek
+
+      # ===== Telegram =====
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID_METALS: ${{ secrets.TELEGRAM_CHAT_ID_METALS }}
+      # Opcional: chat de teste e/ou tópico (threads)
+      TELEGRAM_CHAT_ID_TEST: ${{ secrets.TELEGRAM_CHAT_ID_TEST }}
+      TELEGRAM_MESSAGE_THREAD_ID: ${{ secrets.TELEGRAM_MESSAGE_THREAD_ID }}
+
+      # ===== Dados macro (opcionais) =====
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       GOLDAPI_KEY: ${{ secrets.GOLDAPI_KEY }}
-      METALS_DEV_API: ${{ secrets.METALS_DEV_API }}
-      METAL_PRICE_API: ${{ secrets.METAL_PRICE_API }}
-      NASDAQ_DATA_LINK_API_KEY: ${{ secrets.NASDAQ_DATA_LINK_API_KEY }}
-
-      SEC_USER_AGENT: HubMetalsBot/1.0 (contact: your-email@example.com)
-      AISC_TICKERS: NEM,GOLD
 
     steps:
       - name: Checkout
@@ -53,22 +56,26 @@ jobs:
         with:
           python-version: "3.11"
 
-      # preserva flags de envio e contador entre execuções
-      - name: Cache sent flags and counters
-        uses: actions/cache@v4
-        with:
-          path: |
-            .sent
-            counters
-          key: gold-state-${{ runner.os }}-${{ hashFiles('scripts/gold_report.py') }}
-          restore-keys: |
-            gold-state-${{ runner.os }}-
-
-      - name: Install dependencies
+      - name: Instalar dependências
         run: |
-          if [ -f requirements.txt ]; then
-            pip install -r requirements.txt
-          fi
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-      - name: Run daily gold report
-        run: python scripts/gold_report.py
+      - name: (Opcional) Verificar PiAPI
+        if: ${{ env.PIAPI_API_KEY != '' }}
+        continue-on-error: true
+        run: |
+          python scripts/providers/../tools/check_piapi.py
+
+      # Execução em modo PREVIEW (se acionado manualmente com preview=true)
+      - name: Rodar Gold Diário (PREVIEW)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.preview == true }}
+        run: |
+          python scripts/gold_daily.py --send-telegram --preview
+
+      # Execução normal (agendado OU manual preview=false)
+      - name: Rodar Gold Diário
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.preview != true }}
+        run: |
+          python scripts/gold_daily.py --send-telegram
+
