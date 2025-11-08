@@ -169,27 +169,63 @@ def gerar_analise_ouro(contexto_textual: str, provider_hint: Optional[str] = Non
     Usa LLMClient com fallback automático. Retorna dict com texto e provedor usado.
     """
     system_msg = (
-        "Você é um analista financeiro sênior. Escreva em PT-BR, objetivo e claro, "
-        "com dados e interpretação executiva. Evite jargão desnecessário; "
-        "mostre raciocínio econômico coerente."
+       "Você é o Head de Commodities Research de uma instituição global. 
+Produza análise em PT-BR com precisão, concisão e foco em fluxo, risco e 
+implicações de preço. Cite todos os números disponíveis e use colchetes para 
+indicar a fonte (ex.: [CFTC], [LBMA], [SPDR], [FRED]). Evite jargões; mantenha 
+tom profissional e direto."
     )
     user_msg = f"""
-Gere um **Relatório Diário — Ouro (XAU/USD)** estruturado nas seções abaixo.
-Seja específico e conciso, com foco em implicações de preço e contexto institucional.
+Produza o **Relatório Diário — Ouro (XAU/USD)** conforme as seções especificadas.
+Limite o texto a ~250–350 palavras, priorizando números, fatos e implicações de
+preço. Evite frases vagas ou especulativas. Separe claramente a leitura de curto
+prazo (dias/semanas) da leitura de médio prazo (1–3 meses), com foco em fluxo,
+drivers macro e risco.
 
-1) Fluxos em ETFs de Ouro (GLD/IAU)
-2) Posição Líquida em Futuros (CFTC/CME)
-3) Reservas (LBMA/COMEX) e Estoques
-4) Fluxos de Bancos Centrais
-5) Mercado de Mineração
-6) Câmbio e DXY (Dollar Index)
-7) Taxas de Juros e Treasuries
-8) Notas de Instituições Financeiras / Research
-9) Interpretação Executiva (bullet points objetivos, até 5 linhas)
-10) Conclusão (1 parágrafo, inclua leitura de curto e médio prazo)
 
-Baseie-se no contexto factual levantado:
-{contexto_textual}
+1) Fluxos em ETFs de Ouro (GLD/IAU):
+   Avalie entradas/saídas, variações em shares outstanding, comportamento recente de AUM
+   e implicações para demanda financeira.
+
+2) Posição Líquida em Futuros (CFTC/CME):
+   Analise o movimento da posição líquida (commercial vs. managed money) e o impacto
+   sobre o sentimento especulativo.
+
+3) Reservas (LBMA/COMEX) e Estoques:
+   Discuta movimentos relevantes nos estoques físicos disponíveis, alterações de vaults
+   e eventuais pressões de oferta.
+
+4) Fluxos de Bancos Centrais:
+   Relate compras/vendas recentes, tendências acumuladas e papel dos bancos centrais
+   como estabilizadores ou aceleradores de demanda.
+
+5) Mercado de Mineração:
+   Comente produção, custos, guidance de empresas e variáveis que afetam oferta primária.
+
+6) Câmbio e DXY (Dollar Index):
+   Interprete o movimento do dólar (spot e tendências), indicando como afeta o ouro
+   via canal de preço relativo e liquidez.
+
+7) Taxas de Juros e Treasuries (nominal e real):
+   Mostre impacto das curvas (10Y, real yields, TIPS) nas condições financeiras e no
+   custo de carregamento do ouro.
+
+8) Notas de Instituições Financeiras / Research:
+   Resuma visões recentes de players relevantes (ex.: GS, JPM, UBS, Citi) e o consenso
+   de mercado apontado por relatórios publicados.
+
+9) Interpretação Executiva:
+   Liste 5 bullets objetivos com leitura do quadro geral, destacando drivers dominantes,
+   riscos imediatos e oportunidades.
+
+10) Conclusão:
+   Forneça 1 parágrafo sintetizando curto prazo (dias/semanas) e médio prazo (1–3 meses),
+   enfatizando preços, vetores de fluxo e condições macro.
+
+
+
+Dados disponíveis (JSON):
+{data_json}
 """.strip()
 
     # LLM_PROVIDER e LLM_FALLBACK_ORDER são lidos do ambiente.
