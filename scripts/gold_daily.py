@@ -5,7 +5,7 @@ Relatório Diário — Ouro (XAU/USD)
 - Usa LLMClient (PIAPI como padrão + fallback Groq/OpenAI/DeepSeek)
 - Título com contador "Nº X" e data BRT
 - Trava diária (.sent) para envio único por dia (ignorável com --force)
-- Envio opcional ao Telegram
+- Envio opcional ao Telegram (parse_mode=HTML, com formatação limpa)
 
 Requisitos de ambiente (veja .env.example):
   # LLM (padrão = PiAPI)
@@ -22,6 +22,7 @@ Requisitos de ambiente (veja .env.example):
   TELEGRAM_BOT_TOKEN=...
   TELEGRAM_CHAT_ID_METALS=...      (id do grupo)
   TELEGRAM_MESSAGE_THREAD_ID=...   (opcional: id do tópico, se usar)
+  TELEGRAM_CHAT_ID_TEST=...        (opcional: para preview)
 
   # Dados/Fontes (opcionais, usados no contexto factual)
   FRED_API_KEY=...
@@ -29,18 +30,21 @@ Requisitos de ambiente (veja .env.example):
 """
 
 import os
+import re
 import json
 import argparse
-import html
+import html as html_escape
 import time
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any, List
 
 # --- Importa o cliente LLM unificado com fallback ---
-from providers.llm_client import LLMClient
+from providers.llm_client import LLLMClient as LLMClient  # compat se seu módulo usa esse nome
+# Se seu arquivo original for exatamente "LLMClient", use a linha abaixo e remova a de cima:
+# from providers.llm_client import LLMClient
 
 try:
-    import requests  # só para chamadas HTTP opcionais (FRED/GoldAPI/Telegram)
+    import requests  # chamadas HTTP opcionais (Telegram)
 except Exception:
     requests = None  # o script ainda roda, mas sem chamadas externas opcionais
 
@@ -107,48 +111,32 @@ def sent_guard(path: str) -> bool:
     return False
 
 
-# ---------------- Coleta de contexto (factual) ----------------
+# ---------------- Coleta de contexto (factual - placeholders) ----------------
 def fetch_gld_iau_flows() -> str:
-    """
-    Placeholder para fluxos em ETFs de ouro (GLD/IAU).
-    Se você já tem fonte própria, conecte aqui. Abaixo exemplos defensivos.
-    """
-    # Exemplo: sem dependência fixa; retorna texto enxuto.
-    # Integre API real se desejar (GLD/IAU shares/flows).
-    return "- GLD/IAU: movimentos recentes indicam entradas moderadas e recomposição parcial de posição."
+    # Integre sua fonte real quando quiser (SPDR/BlackRock/Nasdaq Data Link).
+    return "- GLD/IAU: entradas moderadas e recomposição parcial de posição. [SPDR/BlackRock]"
 
 
 def fetch_cftc_net_position(fred_api_key: Optional[str]) -> str:
-    """
-    Placeholder para posição líquida em futuros (CFTC/CME) — via FRED (opcional).
-    Se tiver FRED_API_KEY, você pode consultar séries relacionadas (ex.: GC).
-    Implemento um texto defensivo se requests/fred não disponível.
-    """
+    # Integre FRED/CFTC quando desejar. Mantém texto defensivo.
     if not requests or not fred_api_key:
-        return "- CFTC Net Position (GC): leve aumento na posição líquida comprada (estimativa)."
+        return "- CFTC Net Position (GC): leve aumento na posição líquida comprada. [CFTC/FRED]"
     try:
-        # Exemplo ilustrativo (não uma série real específica):
+        # Exemplo de integração (comentei porque depende da série exata):
         # url = f"https://api.stlouisfed.org/fred/series/observations?series_id=XXXXX&api_key={fred_api_key}&file_type=json"
         # r = requests.get(url, timeout=20); r.raise_for_status()
-        # ... parse ...
-        return "- CFTC Net Position (GC): leve aumento na posição líquida comprada (fonte: FRED)."
+        # parse ...
+        return "- CFTC Net Position (GC): leve aumento na posição líquida comprada. [FRED]"
     except Exception:
-        return "- CFTC Net Position (GC): estabilidade, sem mudança material (fallback)."
+        return "- CFTC Net Position (GC): estabilidade, sem mudança material. [CFTC]"
 
 
 def fetch_reserves_lbma_comex() -> str:
-    """
-    Placeholder para reservas/estoques (LBMA/COMEX).
-    Integre suas fontes/planilhas se desejar.
-    """
-    return "- Reservas LBMA/COMEX: estoques estáveis na margem, sem inflexões relevantes."
+    return "- Reservas LBMA/COMEX: estoques estáveis, sem inflexões relevantes. [LBMA/COMEX]"
 
 
 def fetch_macro_notes() -> str:
-    """
-    Breves notas macro de apoio ao contexto (DXY, Treasuries, etc.)
-    """
-    return "- Macro: DXY lateral e yields dos Treasuries levemente mais altos, limitando altas no ouro."
+    return "- Macro: DXY lateral e yields dos Treasuries um pouco mais altos, limitando altas no ouro. [FRED]"
 
 
 def build_context_block() -> str:
@@ -166,46 +154,102 @@ def build_context_block() -> str:
 # ---------------- Geração do relatório (LLM) ----------------
 def gerar_analise_ouro(contexto_textual: str, provider_hint: Optional[str] = None) -> Dict[str, Any]:
     """
-    Usa LLMClient com fallback automático. Retorna dict com texto e provedor usado.
+    Usa LLMClient com fallback automático. Retorna dict com texto (HTML Telegram-safe) e provedor usado.
     """
     system_msg = (
-        """Você é o Head de Commodities Research de uma instituição global.
-Produza análise em PT-BR com precisão, concisão e foco em fluxo, risco e
-implicações de preço. Cite todos os números disponíveis e use colchetes para
-indicar a fonte (ex.: [CFTC], [LBMA], [SPDR], [FRED]). Evite jargões; mantenha
-tom profissional e direto."""
+        "Você é o Head de Commodities Research de uma instituição global. "
+        "Produza análise em PT-BR com precisão, concisão e foco em fluxo, risco e implicações de preço. "
+        "Cite todos os números disponíveis e coloque a fonte entre colchetes (ex.: [CFTC], [LBMA], [SPDR], [FRED]). "
+        "FORMATO DE SAÍDA OBRIGATÓRIO: SOMENTE HTML simples compatível com Telegram, usando apenas <b>, <i>, <u>, <code> e <br>. "
+        "NÃO use Markdown (nada de **, _, listas automáticas). "
+        "Cada seção deve iniciar com <b>N) Título</b><br> e o conteúdo deve usar frases curtas separadas por <br>. "
+        "Para bullets, use o caractere '• ' seguido do texto e um <br> ao final."
     )
 
     user_msg = f"""
-Produza o **Relatório Diário — Ouro (XAU/USD)** conforme as seções especificadas.
-Limite o texto a ~250–350 palavras, priorizando números, fatos e implicações de
-preço. Evite frases vagas ou especulativas. Separe claramente a leitura de curto
-prazo (dias/semanas) da leitura de médio prazo (1–3 meses), com foco em fluxo,
-drivers macro e risco.
+Gere o <b>Relatório Diário — Ouro (XAU/USD)</b> nas SEGUINTES 10 SEÇÕES, exatamente nesta ordem.
+Limite total a ~250–350 palavras (conteúdo, sem contar título). Evite frases vagas. Trate curto prazo (dias/semanas) e médio prazo (1–3 meses).
+Não inclua links. Não use Markdown. Não repita o título geral dentro do corpo.
 
-1) Fluxos em ETFs de Ouro (GLD/IAU)
-2) Posição Líquida em Futuros (CFTC/CME)
-3) Reservas (LBMA/COMEX) e Estoques
-4) Fluxos de Bancos Centrais
-5) Mercado de Mineração
-6) Câmbio e DXY (Dollar Index)
-7) Taxas de Juros e Treasuries (nominal e real)
-8) Notas de Instituições Financeiras / Research
-9) Interpretação Executiva (5 bullets, curtos)
-10) Conclusão (1 parágrafo)
+<b>1) Fluxos em ETFs de Ouro (GLD/IAU)</b><br>
+<b>2) Posição Líquida em Futuros (CFTC/CME)</b><br>
+<b>3) Reservas (LBMA/COMEX) e Estoques</b><br>
+<b>4) Fluxos de Bancos Centrais</b><br>
+<b>5) Mercado de Mineração</b><br>
+<b>6) Câmbio e DXY (Dollar Index)</b><br>
+<b>7) Taxas de Juros e Treasuries (nominal e real)</b><br>
+<b>8) Notas de Instituições Financeiras / Research</b><br>
+<b>9) Interpretação Executiva (5 bullets, curtos)</b><br>
+<b>10) Conclusão (1 parágrafo)</b><br>
 
-Base factual (texto):
+Regras adicionais:
+• Use números quando possível (ex.: variações %, níveis de yields).<br>
+• Na seção 9, entregue EXATAMENTE 5 bullets, cada um iniciado com '• '.<br>
+• Na seção 10, 1 parágrafo único (sem bullets).<br>
+
+Contexto factual levantado (texto auxiliar — não reimprima literalmente):
 {contexto_textual}
 """.strip()
 
-    # LLM_PROVIDER e LLM_FALLBACK_ORDER são lidos do ambiente.
     llm = LLMClient(provider=provider_hint or None)
-    texto = llm.generate(system_prompt=system_msg, user_prompt=user_msg, temperature=0.4, max_tokens=1600)
-    return {"texto": texto, "provider": llm.active_provider}
+    texto = llm.generate(system_prompt=system_msg, user_prompt=user_msg, temperature=0.3, max_tokens=1600)
+    # LLM já retorna HTML simples; apenas higienize pequenos deslizes comuns.
+    texto_html = sanitize_llm_html(texto)
+    return {"texto": texto_html, "provider": llm.active_provider}
+
+
+def sanitize_llm_html(s: str) -> str:
+    """
+    Sanitiza pequenas violações: troca '**' por <b>, garante <br> padronizado,
+    e remove backticks.
+    """
+    if not isinstance(s, str):
+        return ""
+    out = s
+
+    # Converter **bold** para <b> (caso o modelo escape algo)
+    def _bold_sub(m):
+        return f"<b>{m.group(1)}</b>"
+    out = re.sub(r"\*\*(.*?)\*\*", _bold_sub, out)
+
+    # Remover backticks
+    out = out.replace("```", "").replace("`", "")
+
+    # Normalizar quebras de linha para <br>
+    # Se vier com \n\n, troca por <br><br>; se \n simples, vira <br>
+    out = out.replace("\r\n", "\n").replace("\r", "\n")
+    out = out.replace("\n\n", "<br><br>").replace("\n", "<br>")
+
+    # Evitar listas HTML não suportadas: troque <li> por bullet-texto
+    out = re.sub(r"</?ul>|</?ol>", "", out, flags=re.I)
+    out = re.sub(r"<li>\s*", "• ", out, flags=re.I)
+    out = out.replace("</li>", "<br>")
+
+    return out.strip()
 
 
 # ---------------- Telegram ----------------
-def send_to_telegram(text: str, preview: bool = False) -> None:
+def split_for_telegram(text: str, max_len: int = 3900) -> List[str]:
+    """
+    Divide a mensagem em pedaços seguros para Telegram (limite ~4096).
+    Corta preferindo quebras <br><br> ou <br>.
+    """
+    parts: List[str] = []
+    t = text
+    while len(t) > max_len:
+        cut = t.rfind("<br><br>", 0, max_len)
+        if cut == -1:
+            cut = t.rfind("<br>", 0, max_len)
+        if cut == -1:
+            cut = max_len
+        parts.append(t[:cut])
+        t = t[cut:]
+    if t:
+        parts.append(t)
+    return [p.strip() for p in parts if p.strip()]
+
+
+def send_to_telegram(text_html: str, preview: bool = False) -> None:
     """
     Envia mensagem ao Telegram. Usa:
       TELEGRAM_BOT_TOKEN
@@ -228,26 +272,28 @@ def send_to_telegram(text: str, preview: bool = False) -> None:
         return
 
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-    payload = {
-        "chat_id": chat_id,
-        "text": text,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": True,
-    }
-    if thread_id:
-        payload["message_thread_id"] = thread_id
 
-    try:
-        r = requests.post(url, json=payload, timeout=30)
-        r.raise_for_status()
-        print("Telegram: mensagem enviada com sucesso.")
-    except Exception as e:
-        body = ""
+    for chunk in split_for_telegram(text_html):
+        payload = {
+            "chat_id": chat_id,
+            "text": chunk,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        }
+        if thread_id:
+            payload["message_thread_id"] = thread_id
+
         try:
-            body = r.text[:500]  # type: ignore
-        except Exception:
-            pass
-        print("Falha no envio ao Telegram:", e, body)
+            r = requests.post(url, json=payload, timeout=30)
+            r.raise_for_status()
+        except Exception as e:
+            body = ""
+            try:
+                body = r.text[:500]  # type: ignore
+            except Exception:
+                pass
+            print("Falha no envio ao Telegram:", e, body)
+            break
 
 
 # ---------------- Main ----------------
@@ -281,11 +327,15 @@ def main():
     llm_out = gerar_analise_ouro(contexto_textual=contexto, provider_hint=args.provider)
     dt = time.time() - t0
 
-    corpo = llm_out["texto"].strip()
+    corpo_html = llm_out["texto"].strip()
     provider_usado = llm_out.get("provider", "?")
 
-    # Montagem final (HTML)
-    texto_final = f"<b>{html.escape(titulo)}</b>\n\n{corpo}\n\n<i>Provedor LLM: {html.escape(str(provider_usado))} • {dt:.1f}s</i>"
+    # Montagem final (HTML) — título escapado; corpo já é HTML seguro
+    texto_final = (
+        f"<b>{html_escape.escape(titulo)}</b><br><br>"
+        f"{corpo_html}"
+        f"<br><br><i>Provedor LLM: {html_escape.escape(str(provider_usado))} • {dt:.1f}s</i>"
+    )
 
     # Sempre imprime no CI para debug/auditoria
     print(texto_final)
@@ -297,3 +347,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
