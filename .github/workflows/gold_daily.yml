@@ -1,295 +1,87 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-Relatório Diário — Ouro (XAU/USD)
-- Usa LLMClient (PIAPI como padrão + fallback Groq/OpenAI/DeepSeek)
-- Título com contador "Nº X" e data BRT
-- Trava diária (.sent) para envio único por dia (ignorável com --force)
-- Envio opcional ao Telegram
+name: Gold — Relatório Diário (PIAPI + Fallback)
 
-Requisitos de ambiente (veja .env.example):
-  # LLM (padrão = PiAPI)
-  PIAPI_API_KEY=...
-  PIAPI_MODEL=gpt-4o-mini
-  LLM_PROVIDER=piapi
-  # (opcionais para fallback)
-  GROQ_API_KEY=...
-  OPENAI_API_KEY=...
-  DEEPSEEK_API_KEY=...
-  LLM_FALLBACK_ORDER=piapi,groq,openai,deepseek
+on:
+  schedule:
+    # 09:00 UTC ≙ 06:00 BRT (America/Sao_Paulo)
+    - cron: "0 9 * * *"
+  workflow_dispatch:
+    inputs:
+      preview:
+        description: "Enviar para CHAT DE TESTE (se TELEGRAM_CHAT_ID_TEST estiver definido)"
+        type: boolean
+        default: false
 
-  # Telegram
-  TELEGRAM_BOT_TOKEN=...
-  TELEGRAM_CHAT_ID_METALS=...      (id do grupo)
-  TELEGRAM_MESSAGE_THREAD_ID=...   (opcional: id do tópico, se usar)
+concurrency:
+  group: metals-gold-daily
+  cancel-in-progress: false
 
-  # Dados/Fontes (opcionais, usados no contexto factual)
-  FRED_API_KEY=...
-  GOLDAPI_KEY=...
-"""
+jobs:
+  run:
+    runs-on: ubuntu-latest
 
-import os
-import json
-import argparse
-import html
-import time
-from datetime import datetime, timezone, timedelta
-from typing import Optional, Dict, Any, List
+    env:
+      # ===== LLM (padrão: PIAPI) =====
+      PIAPI_API_KEY: ${{ secrets.PIAPI_API_KEY }}
+      PIAPI_MODEL: gpt-4o-mini
 
-# --- Importa o cliente LLM unificado com fallback ---
-from providers.llm_client import LLMClient
+      # Fallbacks (opcionais)
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      GROQ_MODEL: llama-3.1-70b-versatile
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_MODEL: gpt-4o-mini
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+      DEEPSEEK_MODEL: deepseek-chat
 
-try:
-    import requests  # só para chamadas HTTP opcionais (FRED/GoldAPI/Telegram)
-except Exception:
-    requests = None  # o script ainda roda, mas sem chamadas externas opcionais
+      # Provedor preferido e ordem de fallback
+      LLM_PROVIDER: piapi
+      LLM_FALLBACK_ORDER: piapi,groq,openai,deepseek
 
-# ---------------- Config fuso BRT ----------------
-BRT = timezone(timedelta(hours=-3), name="BRT")
+      # ===== Telegram =====
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID_METALS: ${{ secrets.TELEGRAM_CHAT_ID_METALS }}
+      TELEGRAM_CHAT_ID_TEST: ${{ secrets.TELEGRAM_CHAT_ID_TEST }}
+      TELEGRAM_MESSAGE_THREAD_ID: ${{ secrets.TELEGRAM_MESSAGE_THREAD_ID }}
 
+      # ===== Dados macro (opcionais) =====
+      FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+      GOLDAPI_KEY: ${{ secrets.GOLDAPI_KEY }}
 
-# ---------------- Utilidades de ambiente/arquivo ----------------
-def load_env_if_present():
-    """Carrega variáveis de um .env (mesma pasta), se existir."""
-    env_path = os.path.join(os.path.dirname(__file__), "..", ".env")  # tenta ../.env
-    env_path2 = os.path.join(os.path.dirname(__file__), ".env")       # tenta ./scripts/.env
-    for candidate in (env_path, env_path2):
-        if os.path.exists(candidate):
-            for raw in open(candidate, "r", encoding="utf-8"):
-                line = raw.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                k, v = line.split("=", 1)
-                if k and v and k.strip() not in os.environ:
-                    os.environ[k.strip()] = v.strip()
+      # Caminho do selo diário (.sent) — compartilhado com o Watchdog
+      GOLD_SENT_PATH: data/sentinels/gold_daily.sent
 
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-def ensure_dir(path: str) -> None:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
+      - name: Instalar dependências
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-def today_brt_str() -> str:
-    meses = ["janeiro","fevereiro","março","abril","maio","junho",
-             "julho","agosto","setembro","outubro","novembro","dezembro"]
-    now = datetime.now(BRT)
-    return f"{now.day} de {meses[now.month-1]} de {now.year}"
+      - name: Mostrar horário atual (UTC e BRT)
+        run: |
+          echo "UTC now: $(date -u)"
+          TZ=America/Sao_Paulo date +"BRT now: %Y-%m-%d %H:%M:%S %Z"
 
+      - name: (Opcional) Verificar PiAPI
+        if: ${{ env.PIAPI_API_KEY != '' }}
+        continue-on-error: true
+        run: |
+          python scripts/tools/check_piapi.py || true
 
-def title_counter(counter_path: str, key: str = "diario_ouro") -> int:
-    """
-    Controla a numeração do relatório (Nº X) de forma persistente.
-    """
-    ensure_dir(counter_path)
-    try:
-        data = json.load(open(counter_path, "r", encoding="utf-8")) if os.path.exists(counter_path) else {}
-    except Exception:
-        data = {}
-    data[key] = int(data.get(key, 0)) + 1
-    json.dump(data, open(counter_path, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
-    return data[key]
+      # PREVIEW manual (usa TELEGRAM_CHAT_ID_TEST, se definido)
+      - name: Rodar Gold Diário (PREVIEW)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.preview == true }}
+        run: |
+          python ./scripts/gold_daily.py --send-telegram --preview --sent-path "$GOLD_SENT_PATH"
 
-
-def sent_guard(path: str) -> bool:
-    """
-    Garante envio único por dia usando um 'selo' .sent com a data BRT.
-    Retorna True se JÁ enviou hoje (abortar), False se pode enviar e grava o selo.
-    """
-    ensure_dir(path)
-    today_tag = datetime.now(BRT).strftime("%Y-%m-%d")
-    if os.path.exists(path):
-        try:
-            data = json.load(open(path, "r", encoding="utf-8"))
-            if data.get("last_sent") == today_tag:
-                return True
-        except Exception:
-            pass
-    json.dump({"last_sent": today_tag}, open(path, "w", encoding="utf-8"))
-    return False
-
-
-# ---------------- Coleta de contexto (factual) ----------------
-def fetch_gld_iau_flows() -> str:
-    """
-    Placeholder para fluxos em ETFs de ouro (GLD/IAU).
-    Se você já tem fonte própria, conecte aqui. Abaixo exemplos defensivos.
-    """
-    return "- GLD/IAU: movimentos recentes indicam entradas moderadas e recomposição parcial de posição."
-
-
-def fetch_cftc_net_position(fred_api_key: Optional[str]) -> str:
-    """
-    Placeholder para posição líquida em futuros (CFTC/CME) — via FRED (opcional).
-    Se tiver FRED_API_KEY, você pode consultar séries relacionadas (ex.: GC).
-    Implemento um texto defensivo se requests/fred não disponível.
-    """
-    if not requests or not fred_api_key:
-        return "- CFTC Net Position (GC): leve aumento na posição líquida comprada (estimativa)."
-    try:
-        # Exemplo ilustrativo (não uma série real específica):
-        # url = f\"https://api.stlouisfed.org/fred/series/observations?series_id=XXXXX&api_key={fred_api_key}&file_type=json\"
-        # r = requests.get(url, timeout=20); r.raise_for_status()
-        # ... parse ...
-        return "- CFTC Net Position (GC): leve aumento na posição líquida comprada (fonte: FRED)."
-    except Exception:
-        return "- CFTC Net Position (GC): estabilidade, sem mudança material (fallback)."
-
-
-def fetch_reserves_lbma_comex() -> str:
-    """
-    Placeholder para reservas/estoques (LBMA/COMEX).
-    Integre suas fontes/planilhas se desejar.
-    """
-    return "- Reservas LBMA/COMEX: estoques estáveis na margem, sem inflexões relevantes."
-
-
-def fetch_macro_notes() -> str:
-    """
-    Breves notas macro de apoio ao contexto (DXY, Treasuries, etc.)
-    """
-    return "- Macro: DXY lateral e yields dos Treasuries levemente mais altos, limitando altas no ouro."
-
-
-def build_context_block() -> str:
-    """Constrói um bloco factual enxuto para orientar a LLM."""
-    fred_key = os.environ.get("FRED_API_KEY", "").strip() or None
-    partes = [
-        fetch_gld_iau_flows(),
-        fetch_cftc_net_position(fred_key),
-        fetch_reserves_lbma_comex(),
-        fetch_macro_notes(),
-    ]
-    return "\n".join(partes)
-
-
-# ---------------- Geração do relatório (LLM) ----------------
-def gerar_analise_ouro(contexto_textual: str, provider_hint: Optional[str] = None) -> Dict[str, Any]:
-    """
-    Usa LLMClient com fallback automático. Retorna dict com texto e provedor usado.
-    """
-    system_msg = """
-Você é o Head de Commodities Research de uma instituição global.
-Produza análise em PT-BR com precisão, concisão e foco em fluxo, risco e implicações de preço.
-Formate a resposta em HTML simples compatível com Telegram (<b>, <i>, <u>, <code>, <br>), sem links ricos.
-Cite números sempre que disponíveis e use colchetes para indicar a fonte (ex.: [CFTC], [LBMA], [SPDR], [FRED]).
-Evite jargões; mantenha tom profissional e direto.
-""".strip()
-
-    user_msg = f"""
-Gere o <b>Relatório Diário — Ouro (XAU/USD)</b> nas seções a seguir.
-Regras: máximo ~250–350 palavras; inclua números concretos quando fornecidos; evite afirmações vagas.
-Trate curto prazo (dias/semanas) e médio prazo (1–3 meses). Use quebras com <br> quando fizer sentido.
-
-1) <b>Fluxos em ETFs de Ouro (GLD/IAU)</b>
-2) <b>Posição Líquida em Futuros (CFTC/CME)</b>
-3) <b>Reservas (LBMA/COMEX) e Estoques</b>
-4) <b>Fluxos de Bancos Centrais</b>
-5) <b>Mercado de Mineração</b>
-6) <b>Câmbio e DXY (Dollar Index)</b>
-7) <b>Taxas de Juros e Treasuries (nominal e real)</b>
-8) <b>Notas de Instituições Financeiras / Research</b>
-9) <b>Interpretação Executiva</b> (5 bullets, curtos)
-10) <b>Conclusão</b> (1 parágrafo)
-
-Contexto factual (texto-base):
-{html.escape(contexto_textual)}
-""".strip()
-
-    # LLM_PROVIDER e LLM_FALLBACK_ORDER são lidos do ambiente.
-    llm = LLMClient(provider=provider_hint or None)
-    texto = llm.generate(system_prompt=system_msg, user_prompt=user_msg, temperature=0.4, max_tokens=1600)
-    return {"texto": texto, "provider": llm.active_provider}
-
-
-# ---------------- Telegram ----------------
-def send_to_telegram(text: str, preview: bool = False) -> None:
-    """
-    Envia mensagem ao Telegram. Usa:
-      TELEGRAM_BOT_TOKEN
-      TELEGRAM_CHAT_ID_METALS
-      (opcional) TELEGRAM_MESSAGE_THREAD_ID
-    Se preview=True, tenta TELEGRAM_CHAT_ID_TEST (se existir).
-    """
-    if not requests:
-        print("requests indisponível; envio ao Telegram pulado.")
-        return
-
-    bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-    chat_id_main = os.environ.get("TELEGRAM_CHAT_ID_METALS", "").strip()
-    chat_id_test = os.environ.get("TELEGRAM_CHAT_ID_TEST", "").strip()
-    thread_id = os.environ.get("TELEGRAM_MESSAGE_THREAD_ID", "").strip()
-
-    chat_id = chat_id_test if (preview and chat_id_test) else chat_id_main
-    if not bot_token or not chat_id:
-        print("Telegram não configurado (TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID_METALS). Pulando envio.")
-        return
-
-    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-    payload = {
-        "chat_id": chat_id,
-        "text": text,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": True,
-    }
-    if thread_id:
-        payload["message_thread_id"] = thread_id
-
-    try:
-        r = requests.post(url, json=payload, timeout=30)
-        r.raise_for_status()
-        print("Telegram: mensagem enviada com sucesso.")
-    except Exception as e:
-        body = ""
-        try:
-            body = r.text[:500]  # type: ignore
-        except Exception:
-            pass
-        print("Falha no envio ao Telegram:", e, body)
-
-
-# ---------------- Main ----------------
-def main():
-    load_env_if_present()
-
-    parser = argparse.ArgumentParser(description="Relatório Diário — Ouro (XAU/USD)")
-    parser.add_argument("--send-telegram", action="store_true", help="Envia o relatório para o Telegram")
-    parser.add_argument("--force", action="store_true", help="Ignora a trava diária (.sent)")
-    parser.add_argument("--preview", action="store_true", help="Envia para o chat de TESTE (se TELEGRAM_CHAT_ID_TEST estiver definido)")
-    parser.add_argument("--counter-path", default="data/counters.json", help="Caminho do arquivo de contadores")
-    parser.add_argument("--sent-path", default="data/sentinels/gold_daily.sent", help="Caminho do selo diário (.sent)")
-    parser.add_argument("--provider", default=None, help="Força um provider específico (piapi/groq/openai/deepseek). Opcional.")
-    args = parser.parse_args()
-
-    # Trava diária (.sent)
-    if not args.force and sent_guard(args.sent_path):
-        print("Já foi enviado hoje (trava .sent). Use --force para ignorar.")
-        return
-
-    # Título
-    numero = title_counter(args.counter_path, key="diario_ouro")
-    data_fmt = today_brt_str()
-    titulo = f"📊 Dados de Mercado — Ouro (XAU/USD) — {data_fmt} — Diário — Nº {numero}"
-
-    # Contexto factual
-    contexto = build_context_block()
-
-    # Geração via LLM (piapi padrão, fallback automático)
-    t0 = time.time()
-    llm_out = gerar_analise_ouro(contexto_textual=contexto, provider_hint=args.provider)
-    dt = time.time() - t0
-
-    corpo = llm_out["texto"].strip()
-    provider_usado = llm_out.get("provider", "?")
-
-    # Montagem final (HTML). Observação: o corpo já vem formatado em HTML simples.
-    texto_final = f"<b>{html.escape(titulo)}</b>\n\n{corpo}\n\n<i>Provedor LLM: {html.escape(str(provider_usado))} • {dt:.1f}s</i>"
-
-    # Sempre imprime no CI para debug/auditoria
-    print(texto_final)
-
-    # Envio opcional ao Telegram
-    if args.send_telegram:
-        send_to_telegram(texto_final, preview=args.preview)
-
-
-if __name__ == "__main__":
-    main()
+      # Execução normal (agendado OU manual preview=false)
+      - name: Rodar Gold Diário
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.preview != true }}
+        run: |
+          python ./scripts/gold_daily.py --send-telegram --sent-path "$GOLD_SENT_PATH"
