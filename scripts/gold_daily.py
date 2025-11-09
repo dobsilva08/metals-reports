@@ -51,17 +51,23 @@ BRT = timezone(timedelta(hours=-3), name="BRT")
 # ---------------- Utilidades de ambiente/arquivo ----------------
 def load_env_if_present():
     """Carrega variáveis de um .env (mesma pasta), se existir."""
-    env_path = os.path.join(os.path.dirname(__file__), "..", ".env")  # tenta ../.env
-    env_path2 = os.path.join(os.path.dirname(__file__), ".env")       # tenta ./scripts/.env
-    for candidate in (env_path, env_path2):
+    here = os.path.dirname(__file__)
+    env_candidates = [
+        os.path.join(here, "..", ".env"),  # tenta ../.env
+        os.path.join(here, ".env"),        # tenta ./scripts/.env
+    ]
+    for candidate in env_candidates:
         if os.path.exists(candidate):
-            for raw in open(candidate, "r", encoding="utf-8"):
-                line = raw.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                k, v = line.split("=", 1)
-                if k and v and k.strip() not in os.environ:
-                    os.environ[k.strip()] = v.strip()
+            with open(candidate, "r", encoding="utf-8") as fh:
+                for raw in fh:
+                    line = raw.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    k, v = line.split("=", 1)
+                    k = k.strip()
+                    v = v.strip()
+                    if k and (k not in os.environ):
+                        os.environ[k] = v
 
 
 def ensure_dir(path: str) -> None:
@@ -113,22 +119,18 @@ def fetch_gld_iau_flows() -> str:
     Placeholder para fluxos em ETFs de ouro (GLD/IAU).
     Se você já tem fonte própria, conecte aqui. Abaixo exemplos defensivos.
     """
-    # Exemplo: sem dependência fixa; retorna texto enxuto.
-    # Integre API real se desejar (GLD/IAU shares/flows).
     return "- GLD/IAU: movimentos recentes indicam entradas moderadas e recomposição parcial de posição."
 
 
 def fetch_cftc_net_position(fred_api_key: Optional[str]) -> str:
     """
     Placeholder para posição líquida em futuros (CFTC/CME) — via FRED (opcional).
-    Se tiver FRED_API_KEY, você pode consultar séries relacionadas (ex.: GC).
-    Implemento um texto defensivo se requests/fred não disponível.
     """
     if not requests or not fred_api_key:
         return "- CFTC Net Position (GC): leve aumento na posição líquida comprada (estimativa)."
     try:
-        # Exemplo ilustrativo (não uma série real específica):
-        # url = f"https://api.stlouisfed.org/fred/series/observations?series_id=XXXXX&api_key={fred_api_key}&file_type=json"
+        # Exemplo ilustrativo (adicione sua série real se desejar):
+        # url = f\"https://api.stlouisfed.org/fred/series/observations?series_id=XXXXX&api_key={fred_api_key}&file_type=json\"
         # r = requests.get(url, timeout=20); r.raise_for_status()
         # ... parse ...
         return "- CFTC Net Position (GC): leve aumento na posição líquida comprada (fonte: FRED)."
@@ -139,7 +141,6 @@ def fetch_cftc_net_position(fred_api_key: Optional[str]) -> str:
 def fetch_reserves_lbma_comex() -> str:
     """
     Placeholder para reservas/estoques (LBMA/COMEX).
-    Integre suas fontes/planilhas se desejar.
     """
     return "- Reservas LBMA/COMEX: estoques estáveis na margem, sem inflexões relevantes."
 
@@ -168,20 +169,20 @@ def gerar_analise_ouro(contexto_textual: str, provider_hint: Optional[str] = Non
     """
     Usa LLMClient com fallback automático. Retorna dict com texto e provedor usado.
     """
-    system_msg = (
-       "Você é o Head de Commodities Research de uma instituição global. 
-Produza análise em PT-BR com precisão, concisão e foco em fluxo, risco e 
-implicações de preço. Cite todos os números disponíveis e use colchetes para 
-indicar a fonte (ex.: [CFTC], [LBMA], [SPDR], [FRED]). Evite jargões; mantenha 
-tom profissional e direto."
-    )
+    system_msg = """
+Você é o Head de Commodities Research de uma instituição global.
+Produza análise em PT-BR com precisão, concisão e foco em fluxo, risco e
+implicações de preço. Cite todos os números disponíveis e use colchetes para
+indicar a fonte (ex.: [CFTC], [LBMA], [SPDR], [FRED]). Evite jargões; mantenha
+tom profissional e direto.
+""".strip()
+
     user_msg = f"""
 Produza o **Relatório Diário — Ouro (XAU/USD)** conforme as seções especificadas.
 Limite o texto a ~250–350 palavras, priorizando números, fatos e implicações de
 preço. Evite frases vagas ou especulativas. Separe claramente a leitura de curto
 prazo (dias/semanas) da leitura de médio prazo (1–3 meses), com foco em fluxo,
 drivers macro e risco.
-
 
 1) Fluxos em ETFs de Ouro (GLD/IAU):
    Avalie entradas/saídas, variações em shares outstanding, comportamento recente de AUM
@@ -222,10 +223,8 @@ drivers macro e risco.
    Forneça 1 parágrafo sintetizando curto prazo (dias/semanas) e médio prazo (1–3 meses),
    enfatizando preços, vetores de fluxo e condições macro.
 
-
-
-Dados disponíveis (JSON):
-{data_json}
+Contexto factual (para ancorar o texto):
+{contexto_textual}
 """.strip()
 
     # LLM_PROVIDER e LLM_FALLBACK_ORDER são lidos do ambiente.
