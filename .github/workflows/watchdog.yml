@@ -2,8 +2,8 @@ name: Gold — Watchdog (Backup de Envio)
 
 on:
   schedule:
-    # 09:30 UTC = 06:30 BRT — roda depois do principal
-    - cron: "30 9 * * *"   # 09:30 UTC = 06:30 BRT
+    # 06:30 BRT (UTC-3) = 09:30 UTC — roda depois do principal
+    - cron: "30 9 * * *"
   workflow_dispatch:
 
 concurrency:
@@ -40,7 +40,7 @@ jobs:
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       GOLDAPI_KEY: ${{ secrets.GOLDAPI_KEY }}
 
-      # Caminho unificado do selo diário
+      # Mesmo caminho do selo
       GOLD_SENT_PATH: data/sentinels/gold_daily.sent
 
     steps:
@@ -57,12 +57,32 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: (Opcional) Verificar PiAPI
-        if: ${{ env.PIAPI_API_KEY != '' }}
-        continue-on-error: true
+      - name: Mostrar horário atual (UTC e BRT)
         run: |
-          python scripts/tools/check_piapi.py
+          echo "UTC now: $(date -u)"
+          TZ=America/Sao_Paulo date +"BRT now: %Y-%m-%d %H:%M:%S %Z"
 
-      - name: Rodar Watchdog (respeita trava .sent)
+      # 🔒 Restaura o selo do dia salvo pelo Daily
+      - name: Restore daily sent cache
+        id: cache-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: data/sentinels
+          key: gold-sent-$(date -u +%F)   # ex.: gold-sent-2025-11-09
+          restore-keys: |
+            gold-sent-$(date -u +%F)
+
+      # Se o arquivo-selo existir, NÃO envia (evita duplicidade)
+      - name: Checar selo (.sent)
+        id: check-sent
+        run: |
+          if [ -f "$GOLD_SENT_PATH" ]; then
+            echo "already_sent=true" >> $GITHUB_OUTPUT
+          else
+            echo "already_sent=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Rodar Watchdog (somente se ainda não enviou hoje)
+        if: steps.check-sent.outputs.already_sent == 'false'
         run: |
           python ./scripts/gold_daily.py --send-telegram --sent-path "$GOLD_SENT_PATH"
