@@ -2,7 +2,7 @@ name: Gold — Relatório Diário (PIAPI + Fallback)
 
 on:
   schedule:
-    # 09:00 UTC ≙ 06:00 BRT (America/Sao_Paulo)
+    # 06:00 BRT (UTC-3) = 09:00 UTC
     - cron: "0 9 * * *"
   workflow_dispatch:
     inputs:
@@ -46,7 +46,7 @@ jobs:
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       GOLDAPI_KEY: ${{ secrets.GOLDAPI_KEY }}
 
-      # Caminho do selo diário (.sent) — compartilhado com o Watchdog
+      # Caminho do selo diário (.sent) — compartilhado via cache
       GOLD_SENT_PATH: data/sentinels/gold_daily.sent
 
     steps:
@@ -68,11 +68,16 @@ jobs:
           echo "UTC now: $(date -u)"
           TZ=America/Sao_Paulo date +"BRT now: %Y-%m-%d %H:%M:%S %Z"
 
-      - name: (Opcional) Verificar PiAPI
-        if: ${{ env.PIAPI_API_KEY != '' }}
-        continue-on-error: true
-        run: |
-          python scripts/tools/check_piapi.py || true
+      # 🔒 Restaura cache do selo do dia (se existir, já evita reruns do próprio job)
+      - name: Restore daily sent cache
+        id: cache-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: data/sentinels
+          key: gold-sent-${{ github.run_id }} # unique
+          restore-keys: |
+            gold-sent-${{ github.run_date || '' }}
+            gold-sent-
 
       # PREVIEW manual (usa TELEGRAM_CHAT_ID_TEST, se definido)
       - name: Rodar Gold Diário (PREVIEW)
@@ -85,3 +90,10 @@ jobs:
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.preview != true }}
         run: |
           python ./scripts/gold_daily.py --send-telegram --sent-path "$GOLD_SENT_PATH"
+
+      # 💾 Salva o selo do dia em cache (usado pelo Watchdog)
+      - name: Save daily sent cache
+        uses: actions/cache/save@v4
+        with:
+          path: data/sentinels
+          key: gold-sent-$(date -u +%F)  # ex.: gold-sent-2025-11-09
