@@ -2,7 +2,7 @@ name: Gold — Relatório Diário (PIAPI + Fallback)
 
 on:
   schedule:
-    # 06:00 BRT (UTC-3) = 09:00 UTC
+    # 09:00 UTC ≙ 06:00 BRT
     - cron: "0 9 * * *"
   workflow_dispatch:
     inputs:
@@ -32,7 +32,6 @@ jobs:
       DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
       DEEPSEEK_MODEL: deepseek-chat
 
-      # Provedor preferido e ordem de fallback
       LLM_PROVIDER: piapi
       LLM_FALLBACK_ORDER: piapi,groq,openai,deepseek
 
@@ -42,12 +41,13 @@ jobs:
       TELEGRAM_CHAT_ID_TEST: ${{ secrets.TELEGRAM_CHAT_ID_TEST }}
       TELEGRAM_MESSAGE_THREAD_ID: ${{ secrets.TELEGRAM_MESSAGE_THREAD_ID }}
 
-      # ===== Dados macro (opcionais) =====
+      # ===== Dados (opcionais) =====
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       GOLDAPI_KEY: ${{ secrets.GOLDAPI_KEY }}
-
-      # Caminho do selo diário (.sent) — compartilhado via cache
-      GOLD_SENT_PATH: data/sentinels/gold_daily.sent
+      ALPHA_VANTAGE_API_KEY: ${{ secrets.ALPHA_VANTAGE_API_KEY }}
+      NASDAQ_DATA_LINK_API_KEY: ${{ secrets.NASDAQ_DATA_LINK_API_KEY }}
+      METAL_PRICE_API: ${{ secrets.METAL_PRICE_API }}
+      METALS_DEV_API: ${{ secrets.METALS_DEV_API }}
 
     steps:
       - name: Checkout
@@ -58,42 +58,41 @@ jobs:
         with:
           python-version: "3.11"
 
+      # ---------- CACHE DIÁRIO DOS .SENT ----------
+      - name: Definir data UTC do cache
+        id: date
+        run: echo "date=$(date -u +%F)" >> $GITHUB_OUTPUT
+
+      - name: Preparar pasta de sentinelas
+        run: mkdir -p data/sentinels
+
+      - name: Cache sentinelas (por dia)
+        uses: actions/cache@v4
+        with:
+          path: data/sentinels
+          key: sentinels-${{ github.workflow }}-${{ steps.date.outputs.date }}
+          restore-keys: |
+            sentinels-${{ github.workflow }}-
+
       - name: Instalar dependências
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Mostrar horário atual (UTC e BRT)
+      - name: (Opcional) Verificar PiAPI
+        if: ${{ env.PIAPI_API_KEY != '' }}
+        continue-on-error: true
         run: |
-          echo "UTC now: $(date -u)"
-          TZ=America/Sao_Paulo date +"BRT now: %Y-%m-%d %H:%M:%S %Z"
-
-      # 🔒 Restaura cache do selo do dia (se existir, já evita reruns do próprio job)
-      - name: Restore daily sent cache
-        id: cache-restore
-        uses: actions/cache/restore@v4
-        with:
-          path: data/sentinels
-          key: gold-sent-${{ github.run_id }} # unique
-          restore-keys: |
-            gold-sent-${{ github.run_date || '' }}
-            gold-sent-
+          python scripts/tools/check_piapi.py
 
       # PREVIEW manual (usa TELEGRAM_CHAT_ID_TEST, se definido)
       - name: Rodar Gold Diário (PREVIEW)
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.preview == true }}
         run: |
-          python ./scripts/gold_daily.py --send-telegram --preview --sent-path "$GOLD_SENT_PATH"
+          python ./scripts/gold_daily.py --send-telegram --preview
 
       # Execução normal (agendado OU manual preview=false)
       - name: Rodar Gold Diário
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.preview != true }}
         run: |
-          python ./scripts/gold_daily.py --send-telegram --sent-path "$GOLD_SENT_PATH"
-
-      # 💾 Salva o selo do dia em cache (usado pelo Watchdog)
-      - name: Save daily sent cache
-        uses: actions/cache/save@v4
-        with:
-          path: data/sentinels
-          key: gold-sent-$(date -u +%F)  # ex.: gold-sent-2025-11-09
+          python ./scripts/gold_daily.py --send-telegram
