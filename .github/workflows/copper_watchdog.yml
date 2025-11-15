@@ -2,8 +2,8 @@ name: Copper — Watchdog (Backup de Envio)
 
 on:
   schedule:
-    # 12:00 UTC ≙ 09:00 BRT — roda depois do principal
-    - cron: "0 12 * * *"
+   # 06:30 BRT (UTC-3) = 09:30 UTC — roda depois do principal
+    - cron: "30 9 * * *"
   workflow_dispatch:
 
 concurrency:
