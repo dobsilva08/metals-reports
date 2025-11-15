@@ -1,4 +1,5 @@
-name: Gold — Watchdog (Backup de Envio)
+name: Watchdog — Gold — 06:30 BRT (Backup)
+# restante do arquivo permanece igual
 
 on:
   schedule:
