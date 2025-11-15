@@ -1,4 +1,4 @@
-name: Gold — Relatório Diário (PIAPI + Fallback)
+name: Silver — Relatório Diário (PIAPI + Fallback)
 
 on:
   schedule:
@@ -12,7 +12,7 @@ on:
         default: false
 
 concurrency:
-  group: metals-gold-daily
+  group: metals-silver-daily
   cancel-in-progress: false
 
 jobs:
@@ -64,12 +64,13 @@ jobs:
         run: |
           python scripts/tools/check_piapi.py
 
-      - name: Rodar Gold Diário (PREVIEW)
+      - name: Rodar Silver Diário (PREVIEW)
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.preview == true }}
         run: |
-          python ./scripts/gold_daily.py --send-telegram --preview
+          python ./scripts/silver_daily.py --send-telegram --preview
 
-      - name: Rodar Gold Diário
+      - name: Rodar Silver Diário
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.preview != true }}
         run: |
-          python ./scripts/gold_daily.py --send-telegram
+          python ./scripts/silver_daily.py --send-telegram
+
