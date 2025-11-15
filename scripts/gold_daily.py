@@ -8,10 +8,8 @@ Relatório Diário — Ouro (XAU/USD)
 - Envio opcional ao Telegram
 
 Como usar:
-$ python gold_daily.py --send-telegram
-$ python gold_daily.py --preview
-
-Defaults: envia localmente (imprime). 
+$ python scripts/gold_daily.py --send-telegram
+$ python scripts/gold_daily.py --preview
 """
 
 import os
@@ -31,21 +29,21 @@ except Exception:
 
 BRT = timezone(timedelta(hours=-3), name="BRT")
 
-# ---------- utils ----------
 
 def ensure_dir_for_file(path: str) -> None:
-    """Create parent dir for a file path if needed."""
     parent = os.path.dirname(path)
     if parent:
         os.makedirs(parent, exist_ok=True)
 
+
 def today_brt_str() -> str:
     meses = [
-        "janeiro","fevereiro","março","abril","maio","junho",
-        "julho","agosto","setembro","outubro","novembro","dezembro",
+        "janeiro", "fevereiro", "março", "abril", "maio", "junho",
+        "julho", "agosto", "setembro", "outubro", "novembro", "dezembro",
     ]
     now = datetime.now(BRT)
-    return f"{now.day} de {meses[now.month-1]} de {now.year}"
+    return f"{now.day} de {meses[now.month - 1]} de {now.year}"
+
 
 def title_counter(counter_path: str, key: str) -> int:
     ensure_dir_for_file(counter_path)
@@ -56,6 +54,7 @@ def title_counter(counter_path: str, key: str) -> int:
     data[key] = int(data.get(key, 0)) + 1
     json.dump(data, open(counter_path, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
     return data[key]
+
 
 def sent_guard(path: str) -> bool:
     ensure_dir_for_file(path)
@@ -70,8 +69,6 @@ def sent_guard(path: str) -> bool:
     json.dump({"last_sent": today_tag}, open(path, "w", encoding="utf-8"))
     return False
 
-# ---------- contexto factual (placeholders defensivos) ----------
-# Substitua por integrações reais quando quiser (APIs/DB)
 
 def build_context_block() -> str:
     meta = {
@@ -93,11 +90,9 @@ def build_context_block() -> str:
         meta["dxy"],
         meta["treasuries"],
         meta["research"],
-        # 9 e 10 ficam para a LLM (interpretação + conclusão)
     ]
     return "\n".join(partes)
 
-# ---------- geração LLM ----------
 
 def gerar_analise_ouro(contexto_textual: str, provider_hint: Optional[str] = None) -> Dict[str, Any]:
     system_msg = (
@@ -128,7 +123,6 @@ Baseie-se no contexto factual levantado:
     texto = llm.generate(system_prompt=system_msg, user_prompt=user_msg, temperature=0.4, max_tokens=1800)
     return {"texto": texto, "provider": llm.active_provider}
 
-# ---------- Telegram ----------
 
 def send_to_telegram(text: str, preview: bool = False) -> None:
     if not requests:
@@ -153,7 +147,6 @@ def send_to_telegram(text: str, preview: bool = False) -> None:
     except Exception as e:
         print("Falha no envio ao Telegram:", e, getattr(r, "text", "")[:500])
 
-# ---------- main ----------
 
 def main():
     parser = argparse.ArgumentParser(description="Relatório Diário — Ouro (XAU) — 10 tópicos")
@@ -177,4 +170,16 @@ def main():
     contexto = build_context_block()
     t0 = time.time()
     llm_out = gerar_analise_ouro(contexto_textual=contexto, provider_hint=args.provider)
-    dt = time.time(
+    dt = time.time() - t0
+
+    corpo = llm_out["texto"].strip()
+    provider_usado = llm_out.get("provider", "?")
+    texto_final = f"<b>{html.escape(titulo)}</b>\n\n{corpo}\n\n<i>Provedor LLM: {html.escape(str(provider_usado))} • {dt:.1f}s</i>"
+    print(texto_final)
+
+    if args.send_telegram:
+        send_to_telegram(texto_final, preview=args.preview)
+
+
+if __name__ == "__main__":
+    main()
