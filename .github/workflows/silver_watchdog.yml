@@ -66,32 +66,66 @@ jobs:
 import os,sys,json,requests
 from datetime import datetime, timezone, timedelta
 
-# --- params: ajuste aqui se o arquivo do workflow principal tem outro nome ---
-workflow_file_name = "silver_daily.yml"   # >>> alterar se precisar <<<
+# Ajuste caso o arquivo do workflow principal tenha nome diferente
+candidate_filenames = ["silver_daily.yml", "silver_daily.yaml"]
 
 repo = os.environ.get("GITHUB_REPOSITORY")
 token = os.environ.get("GITHUB_TOKEN")
 if not repo or not token:
     print("GITHUB_REPOSITORY or GITHUB_TOKEN not set")
-    sys.exit(2)
+    sys.exit(1)
 
-headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github+json"}
+headers = {
+    "Authorization": f"Bearer {token}",
+    "Accept": "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+}
 
-# 1) listar workflows e encontrar o workflow id do arquivo silver_daily.yml
-wf_list = requests.get(f"https://api.github.com/repos/{repo}/actions/workflows", headers=headers).json()
+# 1) listar workflows e tentar localizar o workflow id
+wf_list_resp = requests.get(f"https://api.github.com/repos/{repo}/actions/workflows", headers=headers, timeout=30)
+if wf_list_resp.status_code != 200:
+    print("Failed to list workflows:", wf_list_resp.status_code, wf_list_resp.text[:500])
+    sys.exit(1)
+wf_list = wf_list_resp.json().get("workflows", [])
+
 wf_id = None
-for w in wf_list.get("workflows", []):
-    path = w.get("path","")
-    if path.endswith(workflow_file_name):
-        wf_id = w.get("id")
+for w in wf_list:
+    path = w.get("path","") or ""
+    name = w.get("name","") or ""
+    # tentar por path first
+    for fn in candidate_filenames:
+        if path.endswith(fn):
+            wf_id = w.get("id")
+            break
+    if wf_id:
         break
+# se não encontrou por path, tentar por nome que contenha 'silver' (case-insensitive)
 if not wf_id:
-    print("Workflow file not found:", workflow_file_name)
-    sys.exit(2)
+    for w in wf_list:
+        name = (w.get("name") or "").lower()
+        if "silver" in name:
+            wf_id = w.get("id")
+            break
 
-# 2) buscar runs (últimas 100)
-runs = requests.get(f"https://api.github.com/repos/{repo}/actions/workflows/{wf_id}/runs?per_page=100", headers=headers).json()
-workflow_runs = runs.get("workflow_runs", [])
+if not wf_id:
+    print("Workflow file not found (tried filenames and names containing 'silver').")
+    sys.exit(1)
+
+# 2) buscar runs (paginar até 300 runs — 3 páginas de 100)
+workflow_runs = []
+per_page = 100
+for page in range(1,4):
+    runs_resp = requests.get(
+        f"https://api.github.com/repos/{repo}/actions/workflows/{wf_id}/runs?per_page={per_page}&page={page}",
+        headers=headers, timeout=30
+    )
+    if runs_resp.status_code != 200:
+        print("Failed to fetch workflow runs:", runs_resp.status_code, runs_resp.text[:500])
+        sys.exit(1)
+    part = runs_resp.json().get("workflow_runs", [])
+    if not part:
+        break
+    workflow_runs.extend(part)
 
 # 3) calcular 'hoje' em BRT
 BRT_offset = timedelta(hours=-3)
@@ -103,22 +137,24 @@ found = False
 for r in workflow_runs:
     if r.get("conclusion") != "success":
         continue
-    created_at = r.get("created_at")  # formato ISO '2025-11-14T09:12:34Z'
+    created_at = r.get("created_at")  # ISO 'YYYY-MM-DDTHH:MM:SSZ'
     if not created_at:
         continue
-    # converter string ISO -> datetime UTC, depois ajustar para BRT
-    dt_utc = datetime.fromisoformat(created_at.replace("Z","+00:00"))
-    dt_brt = (dt_utc + BRT_offset)
+    try:
+        dt_utc = datetime.fromisoformat(created_at.replace("Z","+00:00"))
+    except Exception:
+        continue
+    dt_brt = dt_utc + BRT_offset
     if dt_brt.date() == today_brt:
         found = True
         break
 
 if found:
     print("FOUND_SUCCESS_TODAY")
-    sys.exit(0)   # step success -> will skip watchdog run
+    sys.exit(0)   # OK — watchdog should not run
 else:
     print("NOT_FOUND_SUCCESS_TODAY")
-    sys.exit(1)   # step fails -> next step (watchdog) will run
+    sys.exit(1)   # trigger watchdog run
 PY
 
       - name: Rodar Watchdog (executa se não houver envio principal hoje)
