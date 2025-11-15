@@ -2,7 +2,7 @@ name: Gold — Relatório Diário (PIAPI + Fallback)
 
 on:
   schedule:
-    # 09:00 UTC ≙ 06:00 BRT
+    # 09:00 UTC ≙ 06:00 BRT (Brasil). Ajuste se quiser outro horário.
     - cron: "0 9 * * *"
   workflow_dispatch:
     inputs:
@@ -24,7 +24,7 @@ jobs:
       PIAPI_API_KEY: ${{ secrets.PIAPI_API_KEY }}
       PIAPI_MODEL: gpt-4o-mini
 
-      # Fallbacks (opcionais)
+      # Fallbacks (opcionais; preencha os secrets se quiser habilitar)
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       GROQ_MODEL: llama-3.1-70b-versatile
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -32,22 +32,20 @@ jobs:
       DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
       DEEPSEEK_MODEL: deepseek-chat
 
+      # Provedor preferido e ordem de fallback
       LLM_PROVIDER: piapi
       LLM_FALLBACK_ORDER: piapi,groq,openai,deepseek
 
       # ===== Telegram =====
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID_METALS: ${{ secrets.TELEGRAM_CHAT_ID_METALS }}
+      # Opcional: chat de teste e/ou tópico (threads)
       TELEGRAM_CHAT_ID_TEST: ${{ secrets.TELEGRAM_CHAT_ID_TEST }}
       TELEGRAM_MESSAGE_THREAD_ID: ${{ secrets.TELEGRAM_MESSAGE_THREAD_ID }}
 
-      # ===== Dados (opcionais) =====
+      # ===== Dados macro (opcionais) =====
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       GOLDAPI_KEY: ${{ secrets.GOLDAPI_KEY }}
-      ALPHA_VANTAGE_API_KEY: ${{ secrets.ALPHA_VANTAGE_API_KEY }}
-      NASDAQ_DATA_LINK_API_KEY: ${{ secrets.NASDAQ_DATA_LINK_API_KEY }}
-      METAL_PRICE_API: ${{ secrets.METAL_PRICE_API }}
-      METALS_DEV_API: ${{ secrets.METALS_DEV_API }}
 
     steps:
       - name: Checkout
@@ -58,22 +56,6 @@ jobs:
         with:
           python-version: "3.11"
 
-      # ---------- CACHE DIÁRIO DOS .SENT ----------
-      - name: Definir data UTC do cache
-        id: date
-        run: echo "date=$(date -u +%F)" >> $GITHUB_OUTPUT
-
-      - name: Preparar pasta de sentinelas
-        run: mkdir -p data/sentinels
-
-      - name: Cache sentinelas (por dia)
-        uses: actions/cache@v4
-        with:
-          path: data/sentinels
-          key: sentinels-${{ github.workflow }}-${{ steps.date.outputs.date }}
-          restore-keys: |
-            sentinels-${{ github.workflow }}-
-
       - name: Instalar dependências
         run: |
           python -m pip install --upgrade pip
@@ -83,16 +65,16 @@ jobs:
         if: ${{ env.PIAPI_API_KEY != '' }}
         continue-on-error: true
         run: |
-          python scripts/tools/check_piapi.py
+          python scripts/providers/../tools/check_piapi.py
 
-      # PREVIEW manual (usa TELEGRAM_CHAT_ID_TEST, se definido)
+      # Execução em modo PREVIEW (se acionado manualmente com preview=true)
       - name: Rodar Gold Diário (PREVIEW)
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.preview == true }}
         run: |
-          python ./scripts/gold_daily.py --send-telegram --preview
+          python scripts/gold_daily.py --send-telegram --preview
 
       # Execução normal (agendado OU manual preview=false)
       - name: Rodar Gold Diário
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.preview != true }}
         run: |
-          python ./scripts/gold_daily.py --send-telegram
+          python scripts/gold_daily.py --send-telegram
