@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-.
 """
 Relatório Diário — Ouro (XAU/USD)
 - 10 tópicos fixos
