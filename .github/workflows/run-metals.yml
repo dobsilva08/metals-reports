@@ -33,7 +33,7 @@ jobs:
       - name: Executar pipeline
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_CHAT_ID_METALS: ${{ secrets.TELEGRAM_CHAT_ID_METALS }}
 
         run: python run_all.py
 
