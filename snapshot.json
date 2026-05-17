@@ -1,60 +1,60 @@
 {
   "date": "17/05/2026",
-  "time": "01:38 UTC",
+  "time": "10:37 UTC",
   "metals": {
     "OURO": {
       "ticker": "GC=F",
-      "price": 4555.8,
-      "change_24h": -1.29,
-      "change_7d": -3.49,
-      "high": 4615.2,
-      "low": 4524.3,
-      "volume": 5.0
+      "price": 4561.9,
+      "change_24h": -1.99,
+      "change_7d": -3.32,
+      "high": 4670.1,
+      "low": 4513.8,
+      "volume": 161086.0
     },
     "PRATA": {
       "ticker": "SI=F",
-      "price": 77.16,
-      "change_24h": -4.28,
-      "change_7d": -4.02,
-      "high": 80.61,
-      "low": 76.0,
-      "volume": 91.0
+      "price": 77.55,
+      "change_24h": -7.68,
+      "change_7d": -9.28,
+      "high": 84.38,
+      "low": 76.09,
+      "volume": 75013.0
     },
     "COBRE": {
       "ticker": "HG=F",
-      "price": 6.25,
-      "change_24h": -4.14,
-      "change_7d": 0.02,
-      "high": 6.52,
-      "low": 6.23,
-      "volume": 718.0
+      "price": 6.3,
+      "change_24h": -4.26,
+      "change_7d": -1.77,
+      "high": 6.59,
+      "low": 6.27,
+      "volume": 68402.0
     },
     "PLATINA": {
       "ticker": "PL=F",
-      "price": 1981.3,
-      "change_24h": -0.0,
-      "change_7d": -3.22,
-      "high": 1981.3,
-      "low": 1981.3,
-      "volume": 31.0
+      "price": 1991.8,
+      "change_24h": -3.77,
+      "change_7d": -5.85,
+      "high": 2082.5,
+      "low": 1974.4,
+      "volume": 16835.0
     },
     "PALADIO": {
       "ticker": "PA=F",
-      "price": 1422.9,
-      "change_24h": -0.0,
-      "change_7d": -4.03,
-      "high": 1422.9,
-      "low": 1422.9,
-      "volume": 0.0
+      "price": 1426.3,
+      "change_24h": -2.31,
+      "change_7d": -5.78,
+      "high": 1460.0,
+      "low": 1413.0,
+      "volume": 6107.0
     },
     "NIQUEL": {
       "ticker": "NIY=F",
       "price": 61825.0,
       "change_24h": -1.88,
-      "change_7d": -2.89,
+      "change_7d": -1.76,
       "high": 63280.0,
       "low": 60995.0,
-      "volume": 15223.0
+      "volume": 25654.0
     },
     "LITIO": {
       "ticker": "LIT",
