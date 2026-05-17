@@ -1,0 +1,69 @@
+{
+  "date": "17/05/2026",
+  "time": "01:38 UTC",
+  "metals": {
+    "OURO": {
+      "ticker": "GC=F",
+      "price": 4555.8,
+      "change_24h": -1.29,
+      "change_7d": -3.49,
+      "high": 4615.2,
+      "low": 4524.3,
+      "volume": 5.0
+    },
+    "PRATA": {
+      "ticker": "SI=F",
+      "price": 77.16,
+      "change_24h": -4.28,
+      "change_7d": -4.02,
+      "high": 80.61,
+      "low": 76.0,
+      "volume": 91.0
+    },
+    "COBRE": {
+      "ticker": "HG=F",
+      "price": 6.25,
+      "change_24h": -4.14,
+      "change_7d": 0.02,
+      "high": 6.52,
+      "low": 6.23,
+      "volume": 718.0
+    },
+    "PLATINA": {
+      "ticker": "PL=F",
+      "price": 1981.3,
+      "change_24h": -0.0,
+      "change_7d": -3.22,
+      "high": 1981.3,
+      "low": 1981.3,
+      "volume": 31.0
+    },
+    "PALADIO": {
+      "ticker": "PA=F",
+      "price": 1422.9,
+      "change_24h": -0.0,
+      "change_7d": -4.03,
+      "high": 1422.9,
+      "low": 1422.9,
+      "volume": 0.0
+    },
+    "NIQUEL": {
+      "ticker": "NIY=F",
+      "price": 61825.0,
+      "change_24h": -1.88,
+      "change_7d": -2.89,
+      "high": 63280.0,
+      "low": 60995.0,
+      "volume": 15223.0
+    },
+    "LITIO": {
+      "ticker": "LIT",
+      "price": 84.08,
+      "change_24h": -0.41,
+      "change_7d": -5.9,
+      "high": 84.6,
+      "low": 83.68,
+      "volume": 523000.0
+    }
+  }
+}
