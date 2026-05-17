@@ -1,0 +1,51 @@
+name: Metals Daily Reporter
+
+on:
+  schedule:
+    - cron: "10 9 * * *"
+
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+
+  run:
+
+    runs-on: ubuntu-latest
+
+    timeout-minutes: 15
+
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Executar pipeline
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+        run: python run_all.py
+
+      - name: Salvar snapshot
+        run: |
+
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+
+          git config --local user.name "github-actions[bot]"
+
+          git add snapshot.json || true
+
+          git diff --staged --quiet || git commit -m "snapshot update [skip ci]"
+
+          git push || true
