@@ -8,16 +8,21 @@ import requests
 def send(message: str, parse_mode: str = "HTML"):
 
     token = os.getenv("TELEGRAM_BOT_TOKEN")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+
+    chat_id = os.getenv(
+        "TELEGRAM_CHAT_ID_METALS"
+    )
 
     if not token:
+
         raise RuntimeError(
             "TELEGRAM_BOT_TOKEN nao definido"
         )
 
     if not chat_id:
+
         raise RuntimeError(
-            "TELEGRAM_CHAT_ID nao definido"
+            "TELEGRAM_CHAT_ID_METALS nao definido"
         )
 
     url = (
