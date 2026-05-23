@@ -1,69 +1,69 @@
 {
-  "date": "22/05/2026",
-  "time": "11:52 UTC",
+  "date": "23/05/2026",
+  "time": "10:41 UTC",
   "metals": {
     "OURO": {
       "ticker": "GC=F",
-      "price": 4519.5,
-      "change_24h": -0.54,
-      "change_7d": -0.8,
-      "high": 4547.0,
-      "low": 4508.2,
-      "volume": 39714.0
+      "price": 4521.0,
+      "change_24h": 0.03,
+      "change_7d": -0.76,
+      "high": 4530.3,
+      "low": 4519.1,
+      "volume": 426.0
     },
     "PRATA": {
       "ticker": "SI=F",
-      "price": 76.07,
-      "change_24h": -1.23,
-      "change_7d": -1.41,
-      "high": 77.42,
+      "price": 75.89,
+      "change_24h": -0.17,
+      "change_7d": -1.65,
+      "high": 76.04,
       "low": 75.89,
-      "volume": 7861.0
+      "volume": 4.0
     },
     "COBRE": {
       "ticker": "HG=F",
       "price": 6.34,
-      "change_24h": -0.17,
+      "change_24h": -0.08,
       "change_7d": 1.42,
-      "high": 6.4,
-      "low": 6.32,
-      "volume": 13555.0
+      "high": 6.35,
+      "low": 6.34,
+      "volume": 1051.0
     },
     "PLATINA": {
       "ticker": "PL=F",
-      "price": 1944.9,
-      "change_24h": -1.78,
-      "change_7d": -1.84,
-      "high": 1981.2,
-      "low": 1939.1,
-      "volume": 4434.0
+      "price": 1931.6,
+      "change_24h": 0.0,
+      "change_7d": -2.51,
+      "high": 1931.6,
+      "low": 1931.6,
+      "volume": 2.0
     },
     "PALADIO": {
       "ticker": "PA=F",
-      "price": 1372.0,
-      "change_24h": -2.21,
-      "change_7d": -3.58,
-      "high": 1409.0,
-      "low": 1361.5,
-      "volume": 2258.0
+      "price": 1358.0,
+      "change_24h": 0.0,
+      "change_7d": -4.56,
+      "high": 1358.0,
+      "low": 1358.0,
+      "volume": 0.0
     },
     "NIQUEL": {
       "ticker": "NIY=F",
-      "price": 63000.0,
-      "change_24h": 1.48,
-      "change_7d": 1.9,
-      "high": 63495.0,
+      "price": 63335.0,
+      "change_24h": 2.02,
+      "change_7d": 2.44,
+      "high": 63795.0,
       "low": 62065.0,
-      "volume": 12589.0
+      "volume": 27668.0
     },
     "LITIO": {
       "ticker": "LIT",
-      "price": 84.38,
-      "change_24h": 1.36,
-      "change_7d": -5.8,
-      "high": 84.83,
-      "low": 83.25,
-      "volume": 205400.0
+      "price": 85.28,
+      "change_24h": 0.25,
+      "change_7d": -1.92,
+      "high": 85.64,
+      "low": 84.56,
+      "volume": 719000.0
     }
   }
 }
