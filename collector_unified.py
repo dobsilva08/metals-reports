@@ -1,6 +1,7 @@
-# collector_unified.py
-# Coleta unificada de metais via Yahoo Finance, com validações e timestamps UTC.
+# Coleta unificada de metais via Yahoo Finance, com retries e validação.
 import json
+import math
+import time
 from datetime import datetime, timezone
 
 import yfinance as yf
@@ -12,50 +13,63 @@ METALS = {
     "PLATINA": "PL=F",
     "PALADIO": "PA=F",
     "NIQUEL": "NIY=F",
-    # LIT é ETF de empresas de lítio/baterias, não preço spot do lítio.
     "ETF_LITIO": "LIT",
 }
+
+RETRIES = 3
+RETRY_DELAY = 2
 
 
 def safe_round(value, digits=2):
     try:
-        result = round(float(value), digits)
-        return result if result == result and abs(result) != float("inf") else None
+        value = float(value)
+        if not math.isfinite(value):
+            return None
+        return round(value, digits)
     except (TypeError, ValueError, OverflowError):
         return None
 
 
 def fetch_metal_data(symbol, ticker):
-    hist = yf.Ticker(ticker).history(period="7d", auto_adjust=False)
-    if hist is None or hist.empty or "Close" not in hist:
-        print(f"[AVISO] Sem histórico para {symbol} ({ticker})")
-        return None
+    last_error = None
+    for attempt in range(1, RETRIES + 1):
+        try:
+            hist = yf.Ticker(ticker).history(period="10d", auto_adjust=False, timeout=20)
+            if hist is None or hist.empty or "Close" not in hist.columns:
+                raise ValueError("Yahoo Finance retornou histórico vazio")
+            hist = hist.dropna(subset=["Close"])
+            if hist.empty:
+                raise ValueError("Histórico sem preços de fechamento válidos")
 
-    hist = hist.dropna(subset=["Close"])
-    if hist.empty:
-        return None
+            current = hist.iloc[-1]
+            current_price = safe_round(current["Close"])
+            first_price = safe_round(hist.iloc[0]["Close"])
+            if current_price is None or first_price in (None, 0):
+                raise ValueError("Preço atual ou base histórica inválida")
 
-    current = hist.iloc[-1]
-    first = hist.iloc[0]["Close"]
-    current_price = safe_round(current["Close"])
-    first_price = safe_round(first)
+            open_value = safe_round(current.get("Open"))
+            change_24h = (
+                safe_round(((current_price - open_value) / open_value) * 100)
+                if open_value not in (None, 0) else None
+            )
+            change_7d = safe_round(((current_price - first_price) / first_price) * 100)
 
-    if current_price is None or first_price in (None, 0):
-        return None
+            return {
+                "ticker": ticker,
+                "price": current_price,
+                "change_24h": change_24h,
+                "change_7d": change_7d,
+                "high": safe_round(current.get("High")),
+                "low": safe_round(current.get("Low")),
+                "volume": safe_round(current.get("Volume"), 0),
+            }
+        except Exception as exc:
+            last_error = exc
+            print(f"[AVISO] {symbol} tentativa {attempt}/{RETRIES}: {exc}")
+            if attempt < RETRIES:
+                time.sleep(RETRY_DELAY * attempt)
 
-    change_7d = safe_round(((current_price - first_price) / first_price) * 100)
-    open_value = safe_round(current.get("Open"))
-    change_24h = safe_round(((current_price - open_value) / open_value) * 100) if open_value else None
-
-    return {
-        "ticker": ticker,
-        "price": current_price,
-        "change_24h": change_24h,
-        "change_7d": change_7d,
-        "high": safe_round(current.get("High")),
-        "low": safe_round(current.get("Low")),
-        "volume": safe_round(current.get("Volume"), 0),
-    }
+    raise RuntimeError(f"Falha final em {symbol} ({ticker}): {last_error}")
 
 
 def collect_all():
@@ -64,19 +78,28 @@ def collect_all():
         "date": now.strftime("%d/%m/%Y"),
         "time": now.strftime("%H:%M UTC"),
         "metals": {},
+        "collection_errors": {},
     }
 
     print("[COLETA] Iniciando coleta de metais...")
     for name, ticker in METALS.items():
         try:
             data = fetch_metal_data(name, ticker)
-            if data:
-                snapshot["metals"][name] = data
-                print(f"[OK] {name} coletado")
-            else:
-                print(f"[AVISO] {name}: sem dados válidos")
+            snapshot["metals"][name] = data
+            print(f"[OK] {name} coletado: {data['price']}")
         except Exception as exc:
+            snapshot["collection_errors"][name] = str(exc)
             print(f"[ERRO] {name}: {exc}")
+
+    print(f"[COLETA] Sucesso: {len(snapshot['metals'])}/{len(METALS)}")
+    print(f"[COLETA] Falhas: {len(snapshot['collection_errors'])}")
+
+    # Permite relatório parcial, mas evita que uma coleta quase totalmente vazia passe.
+    if len(snapshot["metals"]) < 2:
+        raise RuntimeError(
+            f"Coleta insuficiente: somente {len(snapshot['metals'])} ativo(s) válido(s). "
+            f"Falhas: {snapshot['collection_errors']}"
+        )
 
     with open("snapshot.json", "w", encoding="utf-8") as f:
         json.dump(snapshot, f, indent=2, ensure_ascii=False)
