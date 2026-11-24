@@ -1,48 +1,71 @@
 name: Metals Daily Reporter
+run-name: Metals Reporter / ${{ github.event_name }} / ${{ github.run_number }}
 
-run-name: Metals Reporter - ${{ github.event_name }} - ${{ github.run_number }}
-
-on:
+'on':
+  workflow_dispatch:
+    inputs:
+      diagnostic_only:
+        description: "Executar apenas diagnóstico, sem coletar ou enviar"
+        required: false
+        type: boolean
+        default: false
   schedule:
     - cron: "10 9 * * *"
-  workflow_dispatch:
   push:
-    branches: [main]
+    branches:
+      - main
+    paths-ignore:
+      - snapshot.json
 
 permissions:
   contents: write
 
 concurrency:
-  group: metals-reporter-${{ github.ref }}
+  group: metals-reporter-main
   cancel-in-progress: false
 
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-
+    timeout-minutes: 25
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Diagnóstico do ambiente
+      - name: Diagnóstico do runner
         run: |
-          echo "Evento: ${{ github.event_name }}"
-          echo "Branch: ${{ github.ref_name }}"
-          echo "Commit: ${{ github.sha }}"
-          echo "Run: ${{ github.run_number }}"
-          echo "Runner: $RUNNER_OS"
-          python --version || true
-          git --version
+          echo "event=${{ github.event_name }}"
+          echo "ref=${{ github.ref }}"
+          echo "sha=${{ github.sha }}"
+          echo "run_id=${{ github.run_id }}"
+          echo "run_number=${{ github.run_number }}"
+          echo "runner_os=$RUNNER_OS"
+          echo "utc=$(date -u)"
+          echo "python path=$(command -v python || true)"
+          echo "git version=$(git --version)"
           git status --short
+          python --version
 
       - name: Configurar Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: pip
+
+      - name: Diagnóstico básico (sem secrets)
+        run: |
+          python - <<'PY'
+          import sys, ssl, urllib.request
+          print("Python:", sys.version)
+          print("SSL:", ssl.OPENSSL_VERSION)
+          for url in ("https://pypi.org", "https://query1.finance.yahoo.com"):
+              try:
+                  with urllib.request.urlopen(url, timeout=10) as r:
+                      print(url, "HTTP", r.status)
+              except Exception as e:
+                  print(url, "ERROR", repr(e))
+          PY
 
       - name: Instalar dependências
         run: |
@@ -52,22 +75,28 @@ jobs:
           pip list
 
       - name: Validar secrets
+        if: ${{ !inputs.diagnostic_only }}
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID_METALS: ${{ secrets.TELEGRAM_CHAT_ID_METALS }}
         run: |
-          if [ -z "$TELEGRAM_BOT_TOKEN" ]; then echo "::error::TELEGRAM_BOT_TOKEN ausente"; exit 1; fi
-          if [ -z "$TELEGRAM_CHAT_ID_METALS" ]; then echo "::error::TELEGRAM_CHAT_ID_METALS ausente"; exit 1; fi
-          echo "Secrets obrigatórios presentes (valores ocultos)."
+          [ -n "$TELEGRAM_BOT_TOKEN" ] || { echo "::error::TELEGRAM_BOT_TOKEN ausente"; exit 1; }
+          [ -n "$TELEGRAM_CHAT_ID_METALS" ] || { echo "::error::TELEGRAM_CHAT_ID_METALS ausente"; exit 1; }
+          echo "Secrets presentes."
 
-      - name: Executar pipeline
+      - name: Pipeline
+        if: ${{ !inputs.diagnostic_only }}
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID_METALS: ${{ secrets.TELEGRAM_CHAT_ID_METALS }}
         run: python -u run_all.py
 
+      - name: Diagnóstico concluído
+        if: ${{ inputs.diagnostic_only }}
+        run: echo "Diagnóstico executado. Pipeline de coleta e envio foi ignorado."
+
       - name: Salvar snapshot
-        if: success()
+        if: ${{ success() && !inputs.diagnostic_only }}
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
