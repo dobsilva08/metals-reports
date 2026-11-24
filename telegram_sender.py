@@ -59,7 +59,7 @@ def send(message: str, parse_mode: str = "HTML"):
     print(f"[Telegram] Envio rejeitado: HTTP={response.status_code}; code={error_code}; {description}")
 
     if parse_mode and parse_mode.upper() == "HTML":
-        response, result = request_send(payload(chat_id, _plain_text(message), None))
+        response, result = request_send(payload(_MIGRATED_CHAT_ID or chat_id, _plain_text(message), None))
         if response.ok and result.get("ok"):
             print("[Telegram] Envio fallback plain text concluído.")
             return result
