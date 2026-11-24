@@ -1,15 +1,9 @@
 # collector_unified.py
-# Coleta unificada de metais via Yahoo Finance
-
+# Coleta unificada de metais via Yahoo Finance, com validações e timestamps UTC.
 import json
 from datetime import datetime, timezone
 
 import yfinance as yf
-
-
-# --------------------------------------------------
-# CONFIG
-# --------------------------------------------------
 
 METALS = {
     "OURO": "GC=F",
@@ -18,53 +12,40 @@ METALS = {
     "PLATINA": "PL=F",
     "PALADIO": "PA=F",
     "NIQUEL": "NIY=F",
-    "LITIO": "LIT"
+    # LIT é ETF de empresas de lítio/baterias, não preço spot do lítio.
+    "ETF_LITIO": "LIT",
 }
 
 
-# --------------------------------------------------
-# FORMATADORES
-# --------------------------------------------------
-
 def safe_round(value, digits=2):
-
     try:
-        return round(float(value), digits)
-    except Exception:
+        result = round(float(value), digits)
+        return result if result == result and abs(result) != float("inf") else None
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
-# --------------------------------------------------
-# COLETA
-# --------------------------------------------------
-
 def fetch_metal_data(symbol, ticker):
+    hist = yf.Ticker(ticker).history(period="7d", auto_adjust=False)
+    if hist is None or hist.empty or "Close" not in hist:
+        print(f"[AVISO] Sem histórico para {symbol} ({ticker})")
+        return None
 
-    asset = yf.Ticker(ticker)
-
-    hist = asset.history(period="7d")
-
+    hist = hist.dropna(subset=["Close"])
     if hist.empty:
         return None
 
     current = hist.iloc[-1]
-
     first = hist.iloc[0]["Close"]
-
     current_price = safe_round(current["Close"])
+    first_price = safe_round(first)
 
-    change_7d = safe_round(
-        ((current_price - first) / first) * 100
-    )
+    if current_price is None or first_price in (None, 0):
+        return None
 
-    prev_close = current.get("Open")
-
-    if prev_close:
-        change_24h = safe_round(
-            ((current_price - prev_close) / prev_close) * 100
-        )
-    else:
-        change_24h = None
+    change_7d = safe_round(((current_price - first_price) / first_price) * 100)
+    open_value = safe_round(current.get("Open"))
+    change_24h = safe_round(((current_price - open_value) / open_value) * 100) if open_value else None
 
     return {
         "ticker": ticker,
@@ -73,80 +54,35 @@ def fetch_metal_data(symbol, ticker):
         "change_7d": change_7d,
         "high": safe_round(current.get("High")),
         "low": safe_round(current.get("Low")),
-        "volume": safe_round(current.get("Volume"), 0)
+        "volume": safe_round(current.get("Volume"), 0),
     }
 
-
-# --------------------------------------------------
-# SNAPSHOT COMPLETO
-# --------------------------------------------------
 
 def collect_all():
-
+    now = datetime.now(timezone.utc)
     snapshot = {
-        "date": datetime.now(
-            timezone.utc
-        ).strftime("%d/%m/%Y"),
-
-        "time": datetime.now(
-            timezone.utc
-        ).strftime("%H:%M UTC"),
-
-        "metals": {}
+        "date": now.strftime("%d/%m/%Y"),
+        "time": now.strftime("%H:%M UTC"),
+        "metals": {},
     }
 
-    print("[1/1] Coletando metais...")
-
+    print("[COLETA] Iniciando coleta de metais...")
     for name, ticker in METALS.items():
-
         try:
-
-            data = fetch_metal_data(
-                name,
-                ticker
-            )
-
+            data = fetch_metal_data(name, ticker)
             if data:
                 snapshot["metals"][name] = data
+                print(f"[OK] {name} coletado")
+            else:
+                print(f"[AVISO] {name}: sem dados válidos")
+        except Exception as exc:
+            print(f"[ERRO] {name}: {exc}")
 
-                print(
-                    f"[OK] {name} coletado"
-                )
-
-        except Exception as e:
-
-            print(
-                f"[ERRO] {name}: {e}"
-            )
-
-    with open(
-        "snapshot.json",
-        "w",
-        encoding="utf-8"
-    ) as f:
-
-        json.dump(
-            snapshot,
-            f,
-            indent=2,
-            ensure_ascii=False
-        )
+    with open("snapshot.json", "w", encoding="utf-8") as f:
+        json.dump(snapshot, f, indent=2, ensure_ascii=False)
 
     return snapshot
 
 
-# --------------------------------------------------
-# TESTE LOCAL
-# --------------------------------------------------
-
 if __name__ == "__main__":
-
-    data = collect_all()
-
-    print(
-        json.dumps(
-            data,
-            indent=2,
-            ensure_ascii=False
-        )
-    )
+    print(json.dumps(collect_all(), indent=2, ensure_ascii=False))
