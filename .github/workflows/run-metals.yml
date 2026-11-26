@@ -16,6 +16,7 @@ run-name: Metals Reporter / ${{ github.event_name }} / ${{ github.run_number }}
       - main
     paths-ignore:
       - snapshot.json
+      - '.github/workflows/run-metals.yml'
 
 permissions:
   contents: write
