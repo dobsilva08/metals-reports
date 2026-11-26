@@ -11,12 +11,6 @@ run-name: Metals Reporter / ${{ github.event_name }} / ${{ github.run_number }}
         default: false
   schedule:
     - cron: "7 9 * * *" # 06:07 BRT
-  push:
-    branches:
-      - main
-    paths-ignore:
-      - snapshot.json
-      - '.github/workflows/run-metals.yml'
 
 permissions:
   contents: write
