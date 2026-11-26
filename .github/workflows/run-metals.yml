@@ -10,7 +10,7 @@ run-name: Metals Reporter / ${{ github.event_name }} / ${{ github.run_number }}
         type: boolean
         default: false
   schedule:
-    - cron: "22 9 * * *" # 06:22 BRT
+    - cron: "12 9 * * *" # 06:12 BRT — staggered
   push:
     branches:
       - main
