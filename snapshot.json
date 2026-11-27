@@ -1,42 +1,42 @@
 {
   "date": "27/11/2026",
-  "time": "10:24 UTC",
+  "time": "11:21 UTC",
   "metals": {
     "OURO": {
       "ticker": "GC=F",
-      "price": 3698.8,
-      "change_24h": 2.18,
-      "change_7d": -4.0,
-      "high": 3711.9,
+      "price": 3704.7,
+      "change_24h": 2.35,
+      "change_7d": -3.85,
+      "high": 3712.8,
       "low": 3578.8,
-      "volume": 152696.0
+      "volume": 157391.0
     },
     "PRATA": {
       "ticker": "SI=F",
-      "price": 44.42,
-      "change_24h": 6.5,
-      "change_7d": -5.04,
+      "price": 44.59,
+      "change_24h": 6.9,
+      "change_7d": -4.68,
       "high": 44.83,
       "low": 41.08,
-      "volume": 63313.0
+      "volume": 64554.0
     },
     "COBRE": {
       "ticker": "HG=F",
-      "price": 5.67,
-      "change_24h": 3.47,
-      "change_7d": -5.5,
+      "price": 5.68,
+      "change_24h": 3.65,
+      "change_7d": -5.33,
       "high": 5.76,
       "low": 5.43,
-      "volume": 59630.0
+      "volume": 60430.0
     },
     "PLATINA": {
       "ticker": "PL=F",
-      "price": 1345.6,
-      "change_24h": 6.2,
-      "change_7d": -7.07,
+      "price": 1344.5,
+      "change_24h": 6.12,
+      "change_7d": -7.15,
       "high": 1356.2,
       "low": 1256.1,
-      "volume": 19570.0
+      "volume": 19908.0
     },
     "PALADIO": {
       "ticker": "PA=F",
@@ -45,16 +45,16 @@
       "change_7d": -6.2,
       "high": 921.0,
       "low": 856.5,
-      "volume": 7154.0
+      "volume": 7246.0
     },
     "NIQUEL": {
       "ticker": "NIY=F",
-      "price": 58755.0,
-      "change_24h": 2.52,
-      "change_7d": -0.76,
-      "high": 58965.0,
+      "price": 58855.0,
+      "change_24h": 2.7,
+      "change_7d": -0.59,
+      "high": 59000.0,
       "low": 57220.0,
-      "volume": 21648.0
+      "volume": 22228.0
     },
     "ETF_LITIO": {
       "ticker": "LIT",
