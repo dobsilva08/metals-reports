@@ -1,60 +1,60 @@
 {
-  "date": "26/11/2026",
-  "time": "20:34 UTC",
+  "date": "27/11/2026",
+  "time": "10:24 UTC",
   "metals": {
     "OURO": {
       "ticker": "GC=F",
-      "price": 3593.4,
-      "change_24h": -0.73,
-      "change_7d": -6.74,
-      "high": 3634.7,
+      "price": 3698.8,
+      "change_24h": 2.18,
+      "change_7d": -4.0,
+      "high": 3711.9,
       "low": 3578.8,
-      "volume": 81328.0
+      "volume": 152696.0
     },
     "PRATA": {
       "ticker": "SI=F",
-      "price": 41.75,
-      "change_24h": 0.1,
-      "change_7d": -10.75,
-      "high": 42.51,
+      "price": 44.42,
+      "change_24h": 6.5,
+      "change_7d": -5.04,
+      "high": 44.83,
       "low": 41.08,
-      "volume": 31395.0
+      "volume": 63313.0
     },
     "COBRE": {
       "ticker": "HG=F",
-      "price": 5.43,
-      "change_24h": -0.91,
-      "change_7d": -9.5,
-      "high": 5.55,
+      "price": 5.67,
+      "change_24h": 3.47,
+      "change_7d": -5.5,
+      "high": 5.76,
       "low": 5.43,
-      "volume": 29789.0
+      "volume": 59630.0
     },
     "PLATINA": {
       "ticker": "PL=F",
-      "price": 1280.6,
-      "change_24h": 1.07,
-      "change_7d": -11.56,
-      "high": 1305.1,
+      "price": 1345.6,
+      "change_24h": 6.2,
+      "change_7d": -7.07,
+      "high": 1356.2,
       "low": 1256.1,
-      "volume": 9878.0
+      "volume": 19570.0
     },
     "PALADIO": {
       "ticker": "PA=F",
-      "price": 871.5,
-      "change_24h": 0.98,
-      "change_7d": -10.32,
-      "high": 890.5,
+      "price": 911.5,
+      "change_24h": 5.62,
+      "change_7d": -6.2,
+      "high": 921.0,
       "low": 856.5,
-      "volume": 3820.0
+      "volume": 7154.0
     },
     "NIQUEL": {
       "ticker": "NIY=F",
-      "price": 57665.0,
-      "change_24h": 0.62,
-      "change_7d": -2.6,
-      "high": 58295.0,
+      "price": 58755.0,
+      "change_24h": 2.52,
+      "change_7d": -0.76,
+      "high": 58965.0,
       "low": 57220.0,
-      "volume": 13074.0
+      "volume": 21648.0
     },
     "ETF_LITIO": {
       "ticker": "LIT",
